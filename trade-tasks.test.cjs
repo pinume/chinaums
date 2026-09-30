@@ -14,6 +14,7 @@ let now = new Date(2026,8,30,18,13,40).getTime();
 const steps = [];
 const clock = class extends Date { static now() { return now; } };
 const fileName = 'MER_89813014812B1L3_20260930181340_yjhx.xlsx';
+let headerLabels = ['创建时间','文件名','下载状态','操作'];
 const control = new Element('下载'); control.click = () => clicked++;
 control.classList = {contains: name => !ready && name === 'is-disabled'};
 const row = new Element();
@@ -22,7 +23,7 @@ row.children = ['2026-09-30 18:13:40', fileName, '', '下载'].map(text => {
 });
 row.querySelectorAll = s => s === 'td' ? row.children : [];
 const body = new Element(); body.querySelectorAll = s => s === 'tbody > tr' ? [row] : [];
-const table = new Element();table.querySelectorAll = s => s.includes('thead th') ? ['创建时间','文件名','下载状态','操作'].map(t => new Element(t)) : s === '.el-table__body-wrapper' ? [body] : [];
+const table = new Element();table.querySelectorAll = s => s.includes('thead th') ? headerLabels.map(t => new Element(t)) : s === '.el-table__body-wrapper' ? [body] : [];
 const dialog = new Element('共 146 条'); dialog.querySelectorAll = s => s === '.el-dialog__title' ? [new Element('下载暂存列表')] : s === '.el-table' ? [table] : s === '.el-pagination .number.active' ? [new Element('1')] : s === '.el-table__body-wrapper tbody > tr' ? [row] : [];
 const wrapper = new Element(); dialog.parentElement = wrapper;
 const input = new Element(); input.value = '2026/09/01 ~ 2026/09/30';
@@ -47,6 +48,11 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   const args = {fileName, targetMerchantNo:'89813014812B1L3', gate:{allowed:true,merchantNo:'89813014812B1L3'}};
   assert.equal((await adapter('downloadTask',args)).status,'not_ready');
   ready = true;parsed = await adapter('parseDownloadTasks');assert.equal(parsed.rows[0].statusCode,'ready');assert.equal(parsed.rows[0].downloadEnabled,true);
+  const cells = row.children;
+  const order = [2,3,1,0];
+  headerLabels = order.map(index => ['创建时间','文件名','下载状态','操作'][index]);
+  row.children = order.map(index => cells[index]);
+  parsed = await adapter('parseDownloadTasks'); assert.equal(parsed.rows[0].fileName,fileName);
   assert.equal((await adapter('downloadTask',args)).status,'download_requested');assert.equal(clicked,1);
   assert.equal((await adapter('downloadTask',{...args,fileName:fileName.replace('B1L3','B06R')})).status,'blocked');assert.equal(clicked,1);
   hidden = true; assert.equal((await adapter('parseDownloadTasks')).status,'not_open');
@@ -55,7 +61,7 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   await context.CHINAUMS_DOWNLOAD_RUNNER.run({
     reportType:'trade-audit',merchantNo:args.targetMerchantNo,gate:args.gate,
     startedAt:new Date(2026,8,30,18,13,0).toISOString(),
-    submittedMonths:[{month:'2026-09',submittedAt:new Date(2026,8,30,18,13,0).toISOString()}],
+    submittedMonths:[{month:'2026-09',remoteFileName:fileName,submittedAt:new Date(2026,8,30,18,13,0).toISOString()}],
     checkpoint:async()=>{}, sleep:async ms=>{now+=ms;},transition:async()=>{},
     invoke:async(op, params)=>{
       if(op==='downloadTask') { steps.push('download'); assert(ready); }

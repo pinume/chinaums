@@ -18,10 +18,11 @@
     (_, index) => makeMonthRange(today.getFullYear(), index + 1, today)
   );
 
-  const run = async ({ months, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, reconcileUnknown, onMerchantVerified, merchantFromTasks = false }) => {
+  const run = async ({ months, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, reconcileUnknown, onMerchantVerified }) => {
     if (!Array.isArray(months) || !months.length) throw new Error("没有可执行的月份。");
     const results = [];
     let throttleAttempts = 0;
+    let activeMerchantId = null;
     let activeMerchantNo = String(targetMerchantNo || gate?.merchantNo || "").replace(/[\s\u200B-\u200D\uFEFF]/g, "").toUpperCase();
 
     const setMonthState = async (month, status, extra = {}) => {
@@ -59,7 +60,7 @@
       let queryState = { status: "waiting" };
       while (Date.now() < queryDeadline) {
         await checkpoint();
-        queryState = await invoke("queryState", { targetMerchantNo: activeMerchantNo || null });
+        queryState = await invoke("queryState", { targetMerchantNo: activeMerchantNo || null, targetMerchantId: activeMerchantId });
         if (queryState?.status === "failed") {
           await setMonthState(month, "FAILED", { reason: queryState.reason || "查询过程出现无法确认的状态。" });
           throw new Error(`${month.key} 查询状态异常：${queryState.reason || "已停止"}`);
@@ -71,25 +72,32 @@
         await setMonthState(month, "FAILED", { reason: "两分钟内没有取得明确的查询完成状态；查询没有触发导出申请。" });
         throw new Error(`${month.key} 查询结果状态无法确认；为防止错月导出，已暂停。`);
       }
-      if (queryState.status === "ready" && !merchantFromTasks) {
+      if (queryState.status === "ready") {
         const actualMerchantNo = String(queryState.merchantNo || "").replace(/\s/g, "").toUpperCase();
-        if (!actualMerchantNo) {
+        const actualMerchantId = String(queryState.merchantId || "").trim();
+        if (!actualMerchantNo && !actualMerchantId) {
           await setMonthState(month, "FAILED", { reason: "查询结果中没有唯一可确认的商户号；未申请导出。" });
           throw new Error(`${month.key} 查询结果中没有唯一可确认的商户号；未申请导出。`);
         }
-        if (activeMerchantNo && actualMerchantNo !== activeMerchantNo) {
+        if (activeMerchantNo && actualMerchantNo && actualMerchantNo !== activeMerchantNo) {
           await setMonthState(month, "FAILED", { reason: `查询结果商户号 ${actualMerchantNo} 与本轮已确认商户号 ${activeMerchantNo} 不一致；未申请导出。` });
           throw new Error(`${month.key} 查询结果商户号与本轮已确认商户号不一致；未申请导出。`);
         }
-        activeMerchantNo = actualMerchantNo;
+        if (activeMerchantId && actualMerchantId !== activeMerchantId) {
+          await setMonthState(month, "FAILED", { reason: "查询结果的内部商户 ID 已切换；未申请导出。" });
+          throw new Error(`${month.key} 商户身份已切换；未申请导出。`);
+        }
+        activeMerchantId = actualMerchantId || activeMerchantId;
+        activeMerchantNo = actualMerchantNo || activeMerchantNo;
         try {
-          if (onMerchantVerified) await onMerchantVerified(activeMerchantNo);
+          if (onMerchantVerified && activeMerchantNo) await onMerchantVerified(activeMerchantNo);
         } catch (error) {
           await setMonthState(month, "FAILED", { reason: error?.message || "查询结果商户号核对未通过；未申请导出。" });
           throw error;
         }
         gate.allowed = true;
         gate.merchantNo = activeMerchantNo;
+        gate.merchantId = activeMerchantId;
         gate.source = "query-result";
         await transition({ month: month.key, status: "QUERY_READY", count: queryState.count, merchantNo: activeMerchantNo });
       }
@@ -102,25 +110,38 @@
       let submitted = false;
       while (!submitted) {
         await checkpoint();
-        await transition({ month: month.key, status: "SUBMITTING" });
+        const baseline = await invoke("snapshotExportTasks", {});
+        if (baseline?.status !== "found" || !Array.isArray(baseline.rows)) throw new Error(`${month.key} 无法读取申请前暂存任务；未申请导出。`);
+        const previousIds = new Set(baseline.rows.map((row) => row.id));
         const attemptedAt = new Date().toISOString();
-        const submit = await invoke("submitExport", { gate, targetMerchantNo: activeMerchantNo });
-        if (submit?.status !== "clicked") {
+        await transition({ month: month.key, status: "SUBMITTING", attemptedAt });
+        let submit;
+        try {
+          submit = await invoke("submitExport", { gate, targetMerchantNo: activeMerchantNo, targetMerchantId: activeMerchantId });
+        } catch (error) {
+          submit = { status: "unknown", reason: error?.message || "提交调用未响应" };
+        }
+        if (["blocked", "wrong_page", "controls_missing"].includes(submit?.status)) {
           await setMonthState(month, "FAILED", { reason: submit?.reason || "导出控件未通过门禁检查。" });
           throw new Error(`${month.key} 导出已锁定：${submit?.reason || "控件状态未确认"}`);
         }
 
         const responseDeadline = Date.now() + 12000;
         let response = { status: "unknown" };
-        while (Date.now() < responseDeadline) {
+        while (submit?.status === "clicked" && Date.now() < responseDeadline) {
           await checkpoint();
-          response = await invoke("classifySubmit", {});
+          try {
+            response = await invoke("classifySubmit", {});
+          } catch (error) {
+            response = { status: "unknown", reason: error?.message || "提交结果未响应" };
+            break;
+          }
           if (response?.status !== "unknown") break;
           await sleep(500);
         }
 
         if (response?.status === "accepted") {
-          await setMonthState(month, "SUBMITTED", { submittedAt: attemptedAt, count: queryState.count });
+          const accepted = await setMonthState(month, "SUBMITTED", { submittedAt: attemptedAt, remoteFileName: response.fileName || null, count: queryState.count });
           throttleAttempts = 0;
           submitted = true;
           let closed = { status: "unknown" };
@@ -132,6 +153,29 @@
           if (closed?.status !== "closed") {
             throw new Error(`${month.key} 已确认服务器接受申请；本月已记为已提交，提示框关闭失败（${closed?.reason || closed?.status || "未知状态"}）。`);
           }
+          const deadline = Date.now() + 15000;
+          let task = null;
+          while (Date.now() < deadline) {
+            await checkpoint();
+            const snapshot = await invoke("snapshotExportTasks", {});
+            if (snapshot?.status !== "found" || !Array.isArray(snapshot.rows)) throw new Error(`${month.key} 已提交，但无法核对新建暂存任务；禁止重提。`);
+            const added = snapshot.rows.filter((row) => !previousIds.has(row.id));
+            if (added.length > 1) throw new Error(`${month.key} 已提交，但出现多个新暂存任务，无法唯一确认归属；禁止重提。`);
+            if (added.length === 1) { task = added[0]; break; }
+            await sleep(500);
+          }
+          const match = task?.fileName?.match(activeMerchantId
+            ? /^MER_([A-Z0-9]+)_\d{14}_yjhx\.xlsx$/i
+            : /^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
+          if (!match || (activeMerchantNo && match[1].toUpperCase() !== activeMerchantNo) ||
+            (response.fileName && response.fileName !== task.fileName) || baseline.rows.some((row) => row.fileName === task?.fileName)) {
+            throw new Error(`${month.key} 已提交，但新任务文件名或商户号无法确认；禁止重提。`);
+          }
+          activeMerchantNo = match[1].toUpperCase();
+          gate.merchantNo = activeMerchantNo;
+          Object.assign(accepted, { remoteFileName: task.fileName, remoteTaskId: task.id });
+          await transition(accepted);
+          if (onMerchantVerified) await onMerchantVerified(activeMerchantNo, "download-task");
           continue;
         }
 
@@ -160,9 +204,12 @@
         }
 
         await transition({ month: month.key, status: "UNKNOWN", attemptedAt });
-        const reconciliation = reconcileUnknown
-          ? await reconcileUnknown({ month, attemptedAt, gate, targetMerchantNo: activeMerchantNo })
-          : { status: "unknown" };
+        let reconciliation = { status: "unknown" };
+        try {
+          if (reconcileUnknown) reconciliation = await reconcileUnknown({ month, attemptedAt, gate, targetMerchantNo: activeMerchantNo });
+        } catch (error) {
+          reconciliation.reason = error?.message || "未知申请对账失败";
+        }
         if (reconciliation?.status === "accepted") {
           await setMonthState(month, "SUBMITTED", {
             submittedAt: attemptedAt,

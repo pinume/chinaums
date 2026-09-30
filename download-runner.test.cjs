@@ -15,6 +15,7 @@ async function check(failure) {
   const fileName = failure === "trade-refresh" ? "MER_89813014812B06R_20260930120001_yjhx.xlsx" : "89813014812B06R_MX_20260930120001.xlsx";
   const secondFile = "89813014812B06R_MX_20260930120002.xlsx";
   const progressive = ["progressive", "disabled", "resume"].includes(failure);
+  const fallbackAmbiguous = failure === "fallback-ambiguous";
   const clickedFiles = [];
   let lastClickAt = null;
   let awaitingCompletion = false;
@@ -24,8 +25,10 @@ async function check(failure) {
     startedAt: new Date(2026, 8, 30, 12, 0, 0).toISOString(),
     submittedMonths: [
       ...(progressive ? [{ month: "2026-08", submittedAt: "2026-09-30T03:59:00.000Z",
-        downloadedFileName: failure === "resume" ? fileName : null }] : []),
-      { month: "2026-09", submittedAt: "2026-09-30T04:00:00.000Z" }
+        remoteFileName: fileName, downloadedFileName: failure === "resume" ? fileName : null }] : []),
+      { month: "2026-09", remoteFileName: ["fallback", "fallback-ambiguous"].includes(failure) ? null : progressive ? secondFile : fileName,
+        submittedAt: ["fallback", "fallback-ambiguous"].includes(failure)
+          ? new Date(new Date(2026, 8, 30, 12, 0, 1).getTime()).toISOString() : "2026-09-30T04:00:00.000Z" }
     ],
     gate: { allowed: true, merchantNo: "89813014812B06R" },
     checkpoint: async () => {},
@@ -62,7 +65,7 @@ async function check(failure) {
             rows: [{ fileName, createdAt: "2026-09-30 12:00:01",
               statusCode: progressive || opens >= 2 ? "ready" : "pending",
               downloadEnabled: failure === "progressive" || opens >= 2 },
-            ...(progressive ? [{ fileName: secondFile, createdAt: "2026-09-30 12:00:02",
+            ...((progressive || fallbackAmbiguous) ? [{ fileName: secondFile, createdAt: "2026-09-30 12:00:02",
               statusCode: opens >= 2 ? "ready" : "pending", downloadEnabled: opens >= 2 }] : [])]
           };
         case "downloadTask":
@@ -84,8 +87,13 @@ async function check(failure) {
       }
     }
   });
-  if (failure && !progressive && !["trade-refresh", "delayed-open", "already-closed", "slow-close"].includes(failure)) {
-    await assert.rejects(result, failure === "close" ? /无法关闭暂存列表/
+  if (["fallback", "fallback-ambiguous"].includes(failure)) {
+    await assert.rejects(result, /缺少本月已确认的远端文件名/);
+    assert.equal(calls.length, 0);
+    return;
+  }
+  if (failure && (!progressive || fallbackAmbiguous) && !["trade-refresh", "fallback", "delayed-open", "already-closed", "slow-close"].includes(failure)) {
+    await assert.rejects(result, fallbackAmbiguous ? /多个候选/ : failure === "close" ? /无法关闭暂存列表/
       : failure === "stuck" ? /关闭结果无法确认/
       : failure === "never-open" ? /暂存列表打开后未能读取/ : /无法重新打开暂存列表/);
     assert.equal(downloads, 0);
@@ -116,6 +124,8 @@ async function check(failure) {
   await check("slow-close");
   await check("delayed-open");
   await check("never-open");
-  console.log("PASS: ready files download first without duplicates; disabled controls and refresh failures stay guarded");
+  await check("fallback");
+  await check("fallback-ambiguous");
+  console.log("PASS: ready files download first without duplicates; disabled controls, ambiguous time fallback and refresh failures stay guarded");
 })().catch((error) => { console.error(error); process.exitCode = 1; })
   .finally(() => { Date.now = originalDateNow; });

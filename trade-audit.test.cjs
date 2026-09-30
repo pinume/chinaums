@@ -8,8 +8,8 @@ class Element {
   querySelectorAll() { return []; }
   click() {}
 }
-let opened = false, month = 9, picked = [], pending = 0, neverOpen = false, focused = false;
-const input = new Element(); input.value = ''; input.blur = () => { focused = false; }; input.focus = () => { if (!focused) { pending = 3; picked = []; focused = true; } }; input.click = () => {};
+let opened = false, month = 9, picked = [], pending = 0, neverOpen = false, focused = false, background = false;
+const input = new Element(); input.value = ''; input.blur = () => { focused = false; }; input.focus = () => { if (!focused && !background) { pending = 3; picked = []; focused = true; } }; input.click = () => {}; input.dispatchEvent = event => {if(background && event.type === "focus") {pending=3;picked=[];}};
 const confirm = new Element('确定');
 confirm.click = () => { input.value = picked.map(day => `2026/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`).join(' ~ '); opened = false; };
 const panel = new Element();
@@ -27,7 +27,7 @@ panel.querySelectorAll = selector => {
 const calendar = new Element();
 calendar.querySelectorAll = selector => selector === '.layui-laydate-main' ? [panel] : selector === 'span.laydate-btns-confirm' ? [confirm] : [];
 const context = vm.createContext({
-  Element, location: {hostname: 'service.chinaums.com', pathname: '/uisportalfront/', hash: '#/auditOfTrade2026'},
+  Element, Event, location: {hostname: 'service.chinaums.com', pathname: '/uisportalfront/', hash: '#/auditOfTrade2026'},
   getComputedStyle: () => ({display: 'block', visibility: 'visible', opacity: '1'}),
   document: {querySelectorAll: selector => selector === 'input.deal-date' ? [input] : selector === '.layui-laydate' && opened ? [calendar] : []},
   setTimeout: fn => { if (pending && !neverOpen && --pending === 0) opened = true; fn(); }, Date
@@ -48,5 +48,7 @@ vm.runInContext(fs.readFileSync(__dirname + '/trade-audit.js', 'utf8'), context)
   const missing = await adapter('setDateRange', {start: '2026-01-01', end: '2026-01-31'});
   assert.equal(missing.status, 'failed'); assert.match(missing.reason, /3 秒/);
   assert.deepEqual(picked, []);
+  neverOpen=false; background=true; pending=0;
+  assert.equal((await adapter('setDateRange',{start:'2026-02-01',end:'2026-02-28'})).status,'set');
   console.log('PASS: January–September date ranges, month arrows, input readback and disabled future days');
 })().catch(error => { console.error(error); process.exitCode = 1; });

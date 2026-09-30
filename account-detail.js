@@ -79,7 +79,7 @@
     const matches = [...document.querySelectorAll("#crtt_download_xlsx")].filter(visible);
     return matches.length === 1 && !matches[0].disabled ? matches[0] : null;
   };
-  const modalSelector = '[role="dialog"],[aria-modal="true"],.layui-layer,.layui-layer-dialog,.layui-layer-content,.modal,.modal-dialog,.el-dialog__wrapper,.el-dialog,.el-message-box__wrapper,.el-message-box';
+  const modalSelector = '[role="dialog"],[aria-modal="true"],.layui-layer,.layui-layer-dialog,.layui-layer-content,.modal,.modal-dialog,.el-dialog__wrapper,.el-dialog,.el-message-box__wrapper,.el-message-box,.placeLoad-row';
   const visibleModals = () => [...document.querySelectorAll(modalSelector)].filter(visible);
   const downloadDialogs = () => [...document.querySelectorAll(".loadSave-row")].filter(visible)
     .filter((dialog) => {
@@ -95,7 +95,7 @@
         element.getAttribute("aria-disabled") !== "true" && !element.classList.contains("disabled"));
     return controls.length === 1 ? controls[0] : null;
   };
-  const submitMessagePattern = /申请已提交|超过\s*3\s*条|申请失败|导出失败|系统异常/;
+  const submitMessagePattern = /申请已提交|超过\s*\d+\s*条|申请失败|导出失败|系统异常/;
   const submitMessageVisible = () => visibleModals().some((dialog) => submitMessagePattern.test(textOf(dialog)));
   const messageTexts = () => [...new Set([
     ...visibleModals().map(textOf),
@@ -103,8 +103,12 @@
   ].filter(Boolean))];
   const classifySubmit = () => {
     const messages = messageTexts();
-    if (messages.some((text) => /申请已提交/.test(text))) return { status: "accepted" };
-    if (messages.some((text) => /超过\s*3\s*条.*(?:未处理|处理中的导出文件)/.test(text))) {
+    const accepted = messages.filter((text) => /申请已提交/.test(text));
+    if (accepted.length) {
+      const files = [...new Set(visibleModals().map(textOf).filter((text) => /申请已提交/.test(text)).flatMap((text) => text.match(/[A-Z0-9]+_MX_\d{14}(?:_[^\s<>"\']+)?\.xlsx/gi) || []))];
+      return { status: "accepted", fileName: files.length === 1 ? files[0] : null };
+    }
+    if (messages.some((text) => /超过\s*\d+\s*条.*(?:未处理|处理中的导出文件)/.test(text))) {
       return { status: "throttled" };
     }
     if (messages.some((text) => /(?:申请失败|导出失败|系统异常)/.test(text))) {
@@ -140,7 +144,7 @@
           createdAt: cells[0] || "",
           fileName: cells[1] || "",
           status,
-          statusCode: status === "排队中" ? "pending" : status === "已生成" ? "ready" : "unknown",
+          statusCode: ["排队中", "生成中"].includes(status) ? "pending" : status === "已生成" ? "ready" : "unknown",
           downloadEnabled: downloadEnabled(element)
         };
       });
@@ -386,6 +390,21 @@
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
         return { status: "controls_missing", reason: `等待 5 秒后，下载暂存列表入口仍不可用（可见 ${matches.length} 个，禁用 ${Boolean(matches[0]?.disabled)}）。` };
+      }
+      case "snapshotExportTasks": {
+        const rows = [];
+        for (let page = 1; page <= 100; page += 1) {
+          const response = await fetch(`/uisportal/accountCheckDetailQry/selectDeailBillList?page.size=100&page=${page}`);
+          if (!response.ok) throw new Error("读取对账暂存任务失败。");
+          const data = await response.json();
+          if (data.respCode !== "000000" || !Array.isArray(data.list?.content)) throw new Error("对账暂存接口结构异常。");
+          rows.push(...data.list.content.map((row) => ({ id: String(row.export_id || ""), fileName: row.file_name })));
+          if (page >= Number(data.list.totalPages)) {
+            if (rows.length !== Number(data.list.totalElements) || rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("对账暂存任务分页不完整或身份重复。");
+            return { status: "found", rows };
+          }
+        }
+        throw new Error("对账暂存任务页数超出读取范围。");
       }
       case "parseDownloadTasks":
         return scanDownloadTasks();

@@ -205,7 +205,6 @@ const verifyCurrentSession = async () => {
   return {
     allowed: false,
     merchantNo: null,
-    merchantName: null,
     source: "awaiting-query-result",
     authentication
   };
@@ -263,18 +262,19 @@ const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => 
     const globalName = reportType === "account-detail"
       ? "__chinaumsAccountDetailAdapter"
       : "__chinaumsTradeAuditAdapter";
+    const world = reportType === "trade-audit" ? "MAIN" : "ISOLATED";
     const loaded = await chrome.scripting.executeScript({
-      target: { tabId: targetTabId, frameIds: [frameId] },
+      target: { tabId: targetTabId, frameIds: [frameId] }, world,
       func: (name) => typeof globalThis[name] === "function",
       args: [globalName]
     });
     const injectionKey = `${targetTabId}:${frameId}:${file}`;
     if (!injectedAdapters.has(injectionKey) || loaded[0]?.result !== true) {
-      await chrome.scripting.executeScript({ target: { tabId: targetTabId, frameIds: [frameId] }, files: [file] });
+      await chrome.scripting.executeScript({ target: { tabId: targetTabId, frameIds: [frameId] }, world, files: [file] });
       injectedAdapters.add(injectionKey);
     }
     const result = await chrome.scripting.executeScript({
-      target: { tabId: targetTabId, frameIds: [frameId] },
+      target: { tabId: targetTabId, frameIds: [frameId] }, world,
       func: async (name, action, actionArgs) => {
         const adapter = globalThis[name];
         if (typeof adapter !== "function") return { status: "adapter_missing" };
@@ -289,7 +289,7 @@ const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => 
 const navigateToReport = async () => {
   const url = new URL((await chrome.tabs.get(tabId)).url);
   const targetUrl = `https://${SITE_CONFIG.host}${reportType === "trade-audit" ? SITE_CONFIG.reportRoutes.tradeAuditPortal : SITE_CONFIG.reportRoutes.accountDetail}`;
-  if (url.href !== targetUrl) await chrome.tabs.update(tabId, { url: targetUrl, active: true });
+  await chrome.tabs.update(tabId, { active: true, ...(url.href !== targetUrl ? { url: targetUrl } : {}) });
   await waitForTab((tab) => {
     try {
       const current = new URL(tab.url);
@@ -317,47 +317,67 @@ const parsePortalTimestamp = (value) => {
   ).getTime();
 };
 
-const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMerchantNo }) => {
+const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMerchantNo, gate }) => {
   const merchantNo = normalize(targetMerchantNo);
-  if ((!merchantNo && reportType !== "trade-audit") || !attemptedAt) return { status: "unknown", reason: "缺少本次申请时间或已确认商户号，无法安全核对。" };
-  const escapedMerchantNo = merchantNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const invokeSource = (operation, args = {}) => invoke(reportType, operation, args, sourceTabId);
-  const opened = await invokeSource("openDownloadList", {});
-  if (!new Set(["clicked", "already_open"]).has(opened?.status)) {
-    return { status: "unknown", reason: "无法打开暂存列表核对未知申请。" };
-  }
-  const deadline = Date.now() + 10000;
   const attemptedAtMs = new Date(attemptedAt).getTime();
-  while (Date.now() < deadline) {
-    await checkpoint();
-    const list = await invokeSource("parseDownloadTasks", {});
-    const matches = (list?.rows || []).filter((row) => {
-      if (reportType === "account-detail" && !row.fileName?.startsWith(`${merchantNo}_MX_`)) return false;
-      if (Object.values(state?.months || {}).some((month) => month.remoteFileName === row.fileName)) return false;
-      const createdAt = parsePortalTimestamp(row.createdAt);
-      const stamp = reportType === "trade-audit"
-        ? row.fileName?.match(/^MER_[A-Z0-9]+_(\d{14})_yjhx\.xlsx$/i)?.[1]
-        : row.fileName.match(new RegExp(`^${escapedMerchantNo}_MX_(\\d{14})`, "i"))?.[1];
-      if (!stamp) return false;
-      const generatedAt = new Date(
-        Number(stamp.slice(0, 4)), Number(stamp.slice(4, 6)) - 1, Number(stamp.slice(6, 8)),
-        Number(stamp.slice(8, 10)), Number(stamp.slice(10, 12)), Number(stamp.slice(12, 14))
-      ).getTime();
-      // 暂存列表只显示到秒，申请时间带毫秒；给列表时间两秒的显示精度余量。
-      return !Number.isNaN(createdAt) && !Number.isNaN(generatedAt) &&
-        createdAt >= attemptedAtMs - 2000 && generatedAt >= attemptedAtMs - 2000;
-    });
-    if (matches.length === 1) {
-      const closed = await invokeSource("closeDownloadList", {});
-      if (!new Set(["closed", "already_closed"]).has(closed?.status)) {
-        return { status: "unknown", reason: "已找到申请记录，但暂存列表未能安全关闭。" };
-      }
-      return { status: "accepted", createdAt: matches[0].createdAt, fileName: matches[0].fileName, merchantNo: reportType === "trade-audit" ? matches[0].fileName.match(/^MER_([A-Z0-9]+)_/i)[1].toUpperCase() : merchantNo };
-    }
-    if (matches.length > 1) return { status: "unknown", reason: "暂存列表出现多个可能对应本次的任务。" };
-    await sleep(500);
+  if (!merchantNo || !Number.isFinite(attemptedAtMs)) return { status: "unknown", reason: "缺少申请时间或已确认商户号，无法安全核对。" };
+  const invokeSource = (operation, args = {}) => invoke(reportType, operation, args, sourceTabId);
+  const notice = await invokeSource("classifySubmit");
+  const expectedFileName = notice?.status === "accepted" ? notice.fileName : null;
+  if (["accepted", "throttled", "failed"].includes(notice?.status)) {
+    const closed = await invokeSource("closeSubmitDialog");
+    if (closed?.status !== "closed") return { status: "unknown", reason: "提交提示未能安全关闭，无法核对。" };
   }
-  return { status: "unknown", reason: "暂存列表中未找到唯一的新任务；不自动重提。" };
+  const opened = await invokeSource("openDownloadList", { gate, targetMerchantNo: merchantNo });
+  if (!["clicked", "already_open"].includes(opened?.status)) return { status: "unknown", reason: "无法打开暂存列表核对未知申请。" };
+  const deadline = Date.now() + 10000;
+  const matches = new Map();
+  let complete = false;
+  let duplicateCandidate = false;
+  let list;
+  const readPage = async (page) => {
+    while (Date.now() < deadline) {
+      await checkpoint();
+      list = await invokeSource("parseDownloadTasks");
+      if (["found", "empty"].includes(list?.status) && (page === null || Number(list.page) === page)) return true;
+      if (list?.status === "parse_error") return false;
+      await sleep(200);
+    }
+    return false;
+  };
+  if (await readPage(null)) {
+    if (Number(list.page) !== 1) {
+      const selected = await invokeSource("selectDownloadPage", { page: 1 });
+      if (!["clicked", "already_current"].includes(selected?.status) || !await readPage(1)) list = null;
+    }
+    while (list && Date.now() < deadline) {
+      for (const row of list.rows || []) {
+        const generatedAt = globalThis.CHINAUMS_DOWNLOAD_RUNNER.timestampFromFileName(row.fileName, reportType, merchantNo);
+        const createdAt = parsePortalTimestamp(row.createdAt);
+        const identityMatched = Boolean(expectedFileName && row.fileName === expectedFileName);
+        if (generatedAt === null || !Number.isFinite(createdAt) ||
+          (!identityMatched && (generatedAt < attemptedAtMs - 2000 || createdAt < attemptedAtMs - 2000 ||
+            generatedAt > Date.now() + 2000 || createdAt > Date.now() + 2000)) ||
+          Object.values(state?.months || {}).some((month) => month.remoteFileName === row.fileName)) continue;
+        if (!expectedFileName || identityMatched) {
+          if (matches.has(row.fileName)) duplicateCandidate = true;
+          matches.set(row.fileName, row);
+        }
+      }
+      if (matches.size > 1) break;
+      if (list.hasNext === false) { complete = true; break; }
+      const page = Number(list.page);
+      if (!Number.isInteger(page) || page < 1 || list.hasNext !== true) break;
+      const next = await invokeSource("nextDownloadPage");
+      if (next?.status !== "clicked" || !await readPage(page + 1)) break;
+    }
+  }
+  const closed = await invokeSource("closeDownloadList");
+  if (!["closed", "already_closed"].includes(closed?.status)) return { status: "unknown", reason: "暂存列表未能安全关闭。" };
+  if (!complete || matches.size !== 1 || duplicateCandidate) return { status: "unknown", reason: "分页扫描不完整或未找到唯一候选；不自动重提。" };
+  if (!expectedFileName) return { status: "unknown", reason: "仅有时间窗口内的新任务，缺少本次申请返回的远端身份；不能证明归属，不自动重提。" };
+  const row = [...matches.values()][0];
+  return { status: "accepted", createdAt: row.createdAt, fileName: row.fileName, merchantNo };
 };
 
 const closeExistingSubmitNotice = async () => {
@@ -374,6 +394,9 @@ const closeExistingSubmitNotice = async () => {
 
 const run = async () => {
   if (!["account-detail", "trade-audit"].includes(reportType) || !Number.isInteger(tabId) || tabId <= 0 || !SITE_CONFIG) throw new Error("导出参数无效。");
+  if (reportType === "trade-audit" && new Date().getFullYear() !== 2026) {
+    throw new Error("以旧换新采集当前仅适配 2026 页面。");
+  }
   const months = globalThis.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths();
   const monthKeys = months.map((month) => month.key);
   const stored = await chrome.storage.local.get(RUN_KEY);
@@ -409,8 +432,6 @@ const run = async () => {
     runId: `${reportType}-ytd-${now.replace(/[:.]/g, "-")}`,
     tabId,
     runnerTabId: currentRunnerTab?.id ?? null,
-    accountType: null,
-    accountLabel: "当前登录商户",
     merchantNo: null,
     reportType,
     startedAt: now,
@@ -456,13 +477,11 @@ const run = async () => {
       months,
       invoke: (operation, args) => invoke(reportType, operation, args),
       gate,
-      targetMerchantNo: null,
       checkpoint,
       sleep,
       transition,
       reconcileUnknown,
-      merchantFromTasks: reportType === "trade-audit",
-      onMerchantVerified: (merchantNo) => recordMerchant(merchantNo, "query-result")
+      onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
     });
   }
 

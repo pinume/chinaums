@@ -35,10 +35,9 @@ context.CHINAUMS_MONTHLY_RUNNER = {
   yearToDateMonths: context.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths,
   run: async (args) => {
     assert.equal(args.months.length, months.length);
-    assert.equal(args.targetMerchantNo, null);
+    assert.equal(args.targetMerchantNo, undefined);
     assert(Object.values(latest.months).every((month) => month.status === "PENDING"));
-    if (trade) assert.equal(args.merchantFromTasks, true);
-    else await args.onMerchantVerified(merchantNo);
+    await args.onMerchantVerified(merchantNo);
     for (const month of args.months) await args.transition({ month: month.key, status: "SUBMITTED", submittedAt: new Date().toISOString() });
   }
 };
@@ -59,7 +58,7 @@ context.CHINAUMS_DOWNLOAD_RUNNER = { run: async (args) => {
 } };
 const tab = { id: 1, url: trade ? "https://service.chinaums.com" + context.CHINAUMS_SITE_CONFIG.reportRoutes.tradeAuditPortal : "https://service.chinaums.com/uisportal/accountCheckDetailQry/toDetail", status: "complete" };
 context.chrome = {
-  tabs: { get: async (id) => id === 8 ? { id: 8, url: "chrome-extension://test/export.html" } : tab,
+  tabs: { update: async (id, props) => { assert.equal(id, 1); assert.equal(props.active, true); }, get: async (id) => id === 8 ? { id: 8, url: "chrome-extension://test/export.html" } : tab,
     getCurrent: async () => ({ id: 2 }), remove: async (id) => { closedTabs.push(id); } },
   runtime: { getURL: (path) => `chrome-extension://test/${path}` },
   storage: { local: {
@@ -70,11 +69,12 @@ context.chrome = {
       if (["COMPLETED", "BLOCKED"].includes(value.activeExportRun?.status)) complete(value.activeExportRun);
     }
   } },
-  scripting: { executeScript: async ({ args, files }) => {
+  scripting: { executeScript: async ({ args, files, world }) => {
     if (files) {
-      if (files.includes(trade ? "trade-audit.js" : "account-detail.js")) adapterInjections += 1;
+      if (files.includes(trade ? "trade-audit.js" : "account-detail.js")) { assert.equal(world, trade ? "MAIN" : "ISOLATED"); adapterInjections += 1; }
       return [];
     }
+    if (args[0] === (trade ? "__chinaumsTradeAuditAdapter" : "__chinaumsAccountDetailAdapter")) assert.equal(world, trade ? "MAIN" : "ISOLATED");
     if (args[0]?.reportType) return [{ frameId: 0, result: { isReportFrame: true } }];
     if (typeof args[0] === "object") return [{ result: { isTopFrame: true, url: tab.url } }];
     if (args.length === 1) return [{ result: true }];

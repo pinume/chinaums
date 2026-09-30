@@ -10,57 +10,23 @@
     <header class="topbar">
       <div class="brand-mark" aria-hidden="true">银</div>
       <div>
-        <h1>银联商务助手</h1>
-        <p>页面探测与报表助手</p>
+        <h1>Fuck狗娘养的国补数据</h1>
       </div>
     </header>
 
     <main>
       <section class="status-card" aria-live="polite">
-        <div class="status-line"><span>网站</span><strong id="site-status">等待检测</strong></div>
-        <div class="status-line"><span>登录状态</span><strong id="login-status">尚未检测</strong></div>
-        <div class="status-line"><span>页面识别商户</span><strong id="merchant-name">未识别</strong></div>
-        <div class="status-line"><span>页面识别商户号</span><strong id="merchant-no">未读取</strong></div>
-        <div class="status-line"><span>识别状态</span><strong id="merchant-status">? 待确认</strong></div>
-        <div class="status-line"><span>页面类型</span><strong id="page-category">—</strong></div>
-        <p id="merchant-target" class="muted">商户号将在报表查询结果中识别</p>
-        <p class="muted account-warning">不需要选择账号或准备商户。扩展沿用当前登录会话，并从查询结果识别商户号；导出范围为当前登录商户。</p>
-        <button id="start-export-test-button" class="secondary-button merchant-action" type="button" disabled>开始对账明细（1月至本月）</button>
-        <button id="start-trade-export-button" class="secondary-button merchant-action" type="button" disabled>开始以旧换新2026（1月至本月）</button>
-        <p class="muted account-warning">此操作会向网站提交真实导出申请；打开以旧换新采集2026页面后，可运行该表的逐月导出。</p>
-        <p id="status-reason" class="muted">点击检测后读取当前页面。</p>
+        <div class="status-line"><span>网站</span><strong id="site-status">检测中…</strong></div>
+        <div class="status-line"><span>登录状态</span><strong id="login-status">检测中…</strong></div>
+        <div class="status-line"><span>当前商户</span><strong id="merchant-name">检测中…</strong></div>
+        <button id="start-export-test-button" class="primary-button merchant-action" type="button" disabled>开始对账明细（1月至本月）</button>
+        <button id="start-trade-export-button" class="primary-button merchant-action" type="button" disabled>开始以旧换新2026（1月至本月）</button>
+        <p class="muted account-warning">沿用当前登录会话，在后台自动逐月申请并下载；导出范围为当前商户。</p>
       </section>
 
-      <section id="page-meta" class="page-meta hidden">
-        <h2 id="page-title"></h2>
-        <p id="page-url" class="url-text"></p>
-      </section>
-
-      <section id="counts" class="count-grid hidden" aria-label="页面结构数量">
-        <div><strong id="count-menus">0</strong><span>主导航</span></div>
-        <div><strong id="count-business-entries">0</strong><span>业务入口</span></div>
-        <div><strong id="count-interactive-elements">0</strong><span>可点击元素</span></div>
-        <div><strong id="count-links">0</strong><span>链接</span></div>
-        <div><strong id="count-buttons">0</strong><span>按钮</span></div>
-        <div><strong id="count-inputs">0</strong><span>输入框</span></div>
-        <div><strong id="count-selects">0</strong><span>select</span></div>
-        <div><strong id="count-tables">0</strong><span>表格</span></div>
-        <div><strong id="count-iframes">0</strong><span>iframe</span></div>
-        <div><strong id="count-frames">0</strong><span>已扫描文档</span></div>
-        <div><strong id="count-text">0</strong><span>可见文字（字）</span></div>
-      </section>
-
-      <p id="scan-time" class="muted scan-time"></p>
-
-      <div class="actions">
-        <button id="scan-button" class="primary-button" type="button">检测当前页面</button>
-        <button id="details-button" class="secondary-button" type="button" disabled>查看页面结构</button>
-        <button id="copy-button" class="secondary-button copy-button" type="button" disabled>复制检测结果</button>
-      </div>
       <p id="error-message" class="error-message" role="alert"></p>
     </main>
 
-      <footer>不会读取 Cookie 或登录凭证。真实查询与导出只在你明确启动后进行；扩展沿用当前商户，不会自动切换。</footer>
     <script src="site-config.js"></script>
     <script src="auth.js"></script>
     <script src="popup.js"></script>

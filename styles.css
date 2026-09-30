@@ -88,29 +88,11 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 .details-actions button { padding: 0 14px; }
 .back-link { color: #087f8c; font-size: 13px; text-decoration: none; }
 .back-link:hover { text-decoration: underline; }
-.snapshot-content { display: grid; max-width: 1040px; gap: 12px; margin: 0 auto; }
 .overview-card { padding: 18px; }
 .overview-card h2 { margin: 0 0 12px; font-size: 19px; }
 .detail-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 14px; padding: 7px 0; border-top: 1px solid #edf1f2; font-size: 13px; line-height: 1.55; }
 .detail-label { color: #6d7f86; }
-.detail-value { overflow-wrap: anywhere; white-space: pre-wrap; }
-.frame-card { overflow: hidden; border: 1px solid #dfe8ea; border-radius: 12px; background: white; }
-.frame-summary { display: flex; align-items: baseline; gap: 12px; padding: 14px 16px; cursor: pointer; list-style-position: inside; }
-.frame-summary strong { font-size: 14px; }
-.frame-content { padding: 0 16px 16px; }
-.detail-section { padding: 13px 0 2px; border-top: 1px solid #edf1f2; }
-.detail-section h3 { margin: 0 0 8px; color: #29434d; font-size: 13px; }
-.detail-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 5px 18px; margin: 0; padding-left: 19px; font-size: 12px; line-height: 1.55; }
-.detail-list li { overflow-wrap: anywhere; }
-.empty-value { margin: 0; color: #87969b; font-size: 12px; }
-.table-card { margin: 8px 0; padding: 11px 12px; border: 1px solid #e7edef; border-radius: 9px; background: #fbfcfc; }
-.table-card h4 { margin: 0 0 5px; font-size: 12px; }
-.table-card .detail-row { grid-template-columns: 90px minmax(0, 1fr); padding: 4px 0; font-size: 12px; }
-.table-preview { margin-top: 8px; }
-.table-preview p { margin: 0 0 4px; }
-.sample-row { overflow-wrap: anywhere; border-radius: 5px; padding: 5px 7px; color: #40555e; background: #f0f5f6; font-size: 11px; line-height: 1.5; }
-.notice, .privacy-note { margin: 0; padding: 12px 14px; border-radius: 9px; color: #755b1e; background: #fff7de; font-size: 12px; line-height: 1.55; }
-.privacy-note { color: #61747b; background: #eaf1f2; }
+.privacy-note { margin: 0; padding: 12px 14px; border-radius: 9px; color: #61747b; background: #eaf1f2; font-size: 12px; line-height: 1.55; }
 .prepare-content { display: grid; max-width: 860px; gap: 12px; margin: 0 auto; }
 .prepare-log-card h2 { margin: 0 0 10px; font-size: 16px; }
 .prepare-log { display: grid; gap: 7px; max-height: 45vh; overflow: auto; margin: 0; padding-left: 24px; color: #40555e; font-size: 12px; line-height: 1.55; }

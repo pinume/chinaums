@@ -100,7 +100,7 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
       }
       return invoke(operation, args);
     }, reportType: "account-detail", merchantNo, startedAt: start.toISOString(),
-    submittedMonths: Array.from({ length: 12 }, (_, index) => ({ month: `2026-${index + 1}`, submittedAt: start.toISOString() })),
+    submittedMonths: Array.from({ length: 12 }, (_, index) => ({ month: `2026-${index + 1}`, remoteFileName: rows[index].querySelectorAll("td")[1].innerText, submittedAt: start.toISOString() })),
     gate: { allowed: true, merchantNo }, checkpoint: async () => {}, sleep: async () => {}, transition: async () => {}
   });
   assert.equal(result.length, 12);

@@ -173,6 +173,17 @@
       if (current) break;
     }
 
+    const headerUserInfo = document.querySelector(".usersImg .userInfo, header .userInfo");
+    if (!current && headerUserInfo) {
+      const value = extractCurrentMerchant(headerUserInfo, "当前商户") ||
+        extractCurrentMerchant(headerUserInfo, "商户名称");
+      if (value) {
+        current = cleanText(value, 180);
+        source = "merchant-panel";
+        confidence = "high";
+      }
+    }
+
     if (!current) {
       for (const control of merchantControls) {
         let candidate = control.element;
@@ -212,7 +223,8 @@
       }
     }
 
-    const currentLabelVisible = uniqueSemanticNodes.some((item) => item.label === "当前商户");
+    const currentLabelVisible = uniqueSemanticNodes.some((item) => item.label === "当前商户") ||
+      Boolean(headerUserInfo && /当前商户/.test(headerUserInfo.innerText || headerUserInfo.textContent || ""));
     const merchantNameLabelVisible = uniqueSemanticNodes.some((item) => item.label === "商户名称");
     return {
       target: SITE_CONFIG.targetMerchant,
@@ -269,26 +281,7 @@
       : [];
     if (classes.length) return tag + "." + classes.map((name) => CSS.escape(name)).join(".");
     const role = element.getAttribute("role");
-    return role ? tag + '[role="' + role.replace(/"/g, "\\\"") + '"]' : tag;
   };
-
-  const collectInteractiveElements = () => dedupeBy(
-    [...document.querySelectorAll('a,button,[role="button"],[onclick],[data-toggle],div,span')]
-      .filter(isVisible)
-      .filter(isInteractive)
-      .filter((element) => !isNoiseControl(element, readableName(element)))
-      .map((element) => ({
-        text: readableName(element, 140),
-        tag: element.tagName.toLowerCase(),
-        selector: selectorFor(element),
-        clickable: true,
-        role: cleanText(element.getAttribute("role"), 60),
-        className: cleanText(typeof element.className === "string" ? element.className : "", 140),
-        onclick: describeHandler(element.getAttribute("onclick"))
-      }))
-      .filter((item) => item.text),
-    (item) => `${item.text}|${item.selector}`
-  ).slice(0, 120);
 
   const collectVisibleText = () => {
     if (!document.body) return "";
@@ -308,89 +301,6 @@
       if (characterCount >= 7000) break;
     }
     return lines.join("\n").slice(0, 7000);
-  };
-
-  const scanElementDownloadDialog = () => {
-    const dialog = [...document.querySelectorAll(".el-dialog")]
-      .filter(isVisible)
-      .find((element) => cleanText(
-        element.querySelector(".el-dialog__title")?.innerText ||
-        element.querySelector(".el-dialog__header")?.innerText,
-        100
-      ) === "下载暂存列表");
-    if (!dialog) return null;
-
-    const totalMatch = cleanText(dialog.innerText, 7000).match(/共\s*(\d+)\s*条/);
-    const pageElement = dialog.querySelector(".el-pagination .number.active");
-    const tables = [...dialog.querySelectorAll(".el-table")].filter(isVisible);
-    const table = tables.map((element) => {
-      const headers = [...element.querySelectorAll(
-        ".el-table__header-wrapper thead th, .el-table__header-wrapper [role=columnheader]"
-      )]
-        .filter(isVisible)
-        .map((cell) => cleanText(cell.querySelector(".cell")?.innerText || cell.innerText || cell.textContent, 100));
-      const columns = {
-        createdAt: headers.findIndex((header) => header.includes("创建时间")),
-        fileName: headers.findIndex((header) => header.includes("文件名")),
-        status: headers.findIndex((header) => header.includes("下载状态")),
-        operation: headers.findIndex((header) => header.includes("操作"))
-      };
-      return { element, headers, columns };
-    }).find(({ columns }) => Object.values(columns).every((index) => index >= 0));
-
-    if (!table) {
-      return {
-        title: "下载暂存列表",
-        total: totalMatch ? Number(totalMatch[1]) : null,
-        page: pageElement ? Number(cleanText(pageElement.innerText, 20)) || null : null,
-        headers: [],
-        rowCount: 0,
-        rows: [],
-        parseState: "table_not_found"
-      };
-    }
-
-    const body = table.element.querySelector(".el-table__body-wrapper");
-    const rowSelector = "tbody > tr";
-    const candidateRows = body
-      ? [...body.querySelectorAll(rowSelector)]
-      : [...table.element.querySelectorAll(rowSelector)];
-    const rows = dedupeBy(candidateRows.filter(isVisible), (row) => row);
-    const readCell = (cells, index) => cleanText(
-      cells[index]?.querySelector(".cell")?.innerText || cells[index]?.innerText || cells[index]?.textContent,
-      240
-    );
-    const parsedRows = rows.slice(0, 50).map((row) => {
-      const cells = [...row.children].filter((cell) => cell.tagName === "TD");
-      const operationCell = cells[table.columns.operation];
-      const downloadControl = operationCell && [...operationCell.querySelectorAll('a,button,[role="button"]')]
-        .find((element) => cleanText(element.innerText || element.textContent || element.getAttribute("aria-label"), 40) === "下载");
-      const disabled = downloadControl
-        ? Boolean(downloadControl.disabled) ||
-          downloadControl.getAttribute("aria-disabled") === "true" ||
-          downloadControl.classList.contains("is-disabled") ||
-          Boolean(downloadControl.closest(".is-disabled"))
-        : null;
-      const status = readCell(cells, table.columns.status);
-
-      return {
-        createdAt: readCell(cells, table.columns.createdAt),
-        fileName: readCell(cells, table.columns.fileName),
-        status,
-        statusCode: status === "待处理" ? "pending" : status === "处理成功" ? "ready" : "unknown",
-        downloadEnabled: disabled === null ? null : !disabled
-      };
-    }).filter((row) => row.createdAt || row.fileName || row.status);
-
-    return {
-      title: "下载暂存列表",
-      total: totalMatch ? Number(totalMatch[1]) : null,
-      page: pageElement ? Number(cleanText(pageElement.innerText, 20)) || null : null,
-      headers: table.headers,
-      rowCount: parsedRows.length,
-      rows: parsedRows,
-      parseState: parsedRows.length ? "rows_found" : "table_found_empty"
-    };
   };
 
   const resolveMainNavigation = () => {
@@ -413,44 +323,6 @@
         }
       });
     return dedupeBy(items, (item) => item.text + "|" + item.pathname);
-  };
-
-  const collectMenuGroups = (mainNavigation) => {
-    const candidates = [...document.querySelectorAll(
-      'nav,[role="navigation"],[role="menubar"],[role="menu"],[role="tree"],[class*="sidebar" i],[class*="menu" i]'
-    )].filter(isVisible).slice(0, 18);
-    const groups = [];
-    const seenGroups = new Set();
-
-    for (const candidate of candidates) {
-      const clickable = [...candidate.querySelectorAll(
-        'a,button,[role="menuitem"],[role="treeitem"],[role="button"],[onclick]'
-      )]
-        .filter(isVisible)
-        .map((item) => readableName(item, 100))
-        .filter(Boolean);
-      const names = clickable.length ? clickable : [...candidate.querySelectorAll("li")]
-        .filter(isVisible)
-        .map((item) => cleanText(item.innerText, 100))
-        .filter(Boolean);
-      const items = [...new Set(names)].slice(0, 40);
-      if (!items.length) continue;
-      const key = items.join("|");
-      if (seenGroups.has(key)) continue;
-      seenGroups.add(key);
-      groups.push({
-        label: cleanText(candidate.getAttribute("aria-label") || candidate.className || candidate.tagName, 80),
-        items
-      });
-    }
-
-    if (mainNavigation.length) {
-      groups.push({
-        label: "站内主导航（按路由识别）",
-        items: mainNavigation.map((item) => item.text)
-      });
-    }
-    return groups;
   };
 
   const parseGotoUrl = (rawHref) => {
@@ -491,16 +363,8 @@
     if (window.location.hostname !== TARGET_HOST || (!isPortalPage && !isBusinessFrame)) return null;
 
     const mainNavigation = resolveMainNavigation();
-    const menuGroups = collectMenuGroups(mainNavigation);
-    const menus = [...new Set(menuGroups.flatMap((group) => group.items))];
     const businessEntries = resolveBusinessEntries();
     const merchant = detectMerchant();
-    const interactiveElements = collectInteractiveElements();
-    const headings = [...document.querySelectorAll("h1,h2,h3,h4,h5,h6,[role=heading]")]
-      .filter(isVisible)
-      .map((element) => cleanText(element.innerText || element.textContent, 180))
-      .filter(Boolean)
-      .slice(0, 60);
 
     const buttons = [...document.querySelectorAll(
       'button,input[type="button"],input[type="submit"],input[type="reset"],[role="button"]'
@@ -510,7 +374,6 @@
       .map((element) => ({
         text: readableName(element),
         type: element.getAttribute("type") || element.tagName.toLowerCase(),
-        selector: selectorFor(element),
         disabled: Boolean(element.disabled)
       }))
       .filter((item) => item.text)
@@ -518,15 +381,7 @@
 
     const links = [...document.querySelectorAll("a[href]")]
       .filter(isVisible)
-      .map((element) => {
-        const rawHref = element.getAttribute("href") || "";
-        const javascriptHref = /^\s*javascript:/i.test(rawHref);
-        return {
-          text: readableName(element),
-          href: javascriptHref ? safeUrl(rawHref) : safeUrl(element.href),
-          ...(javascriptHref ? { rawHref: safeUrl(rawHref) } : {})
-        };
-      })
+      .map((element) => ({ text: readableName(element), href: safeUrl(element.href) }))
       .slice(0, 80);
 
     const inputs = [...document.querySelectorAll("input,select,textarea")]
@@ -534,84 +389,16 @@
       .map((element) => ({
         tag: element.tagName.toLowerCase(),
         type: element.getAttribute("type") || element.tagName.toLowerCase(),
-        label: labelFor(element),
-        name: cleanText(element.getAttribute("name"), 100),
-        id: cleanText(element.id, 100),
-        required: Boolean(element.required),
-        disabled: Boolean(element.disabled),
-        options: element instanceof HTMLSelectElement
-          ? [...element.options].slice(0, 20).map((option) => cleanText(option.text, 80)).filter(Boolean)
-          : []
+        label: labelFor(element)
       }))
       .slice(0, 60);
-
-    const tables = [...document.querySelectorAll("table")]
-      .filter(isVisible)
-      .slice(0, 10)
-      .map((table, index) => {
-        const rows = [...table.querySelectorAll("tr")].filter(isVisible);
-        const explicitHeaders = [...table.querySelectorAll("thead th,[role=columnheader]")]
-          .filter(isVisible)
-          .map((cell) => cleanText(cell.innerText || cell.textContent, 140))
-          .filter(Boolean);
-        const firstRow = rows[0];
-        const firstRowCells = firstRow ? [...firstRow.querySelectorAll("th,td")] : [];
-        const hasHeadSection = Boolean(table.querySelector("thead"));
-        const firstRowIsHeader = Boolean(firstRow) && (
-          hasHeadSection ||
-          firstRowCells.some((cell) => cell.tagName === "TH" || cell.getAttribute("role") === "columnheader") ||
-          /head|header|title/i.test(String(firstRow.className) + " " + String(firstRow.parentElement?.className || ""))
-        );
-        const inferredHeaders = firstRowIsHeader
-          ? firstRowCells.map((cell) => cleanText(cell.innerText || cell.textContent, 140))
-          : [];
-        const headers = explicitHeaders.length ? explicitHeaders : inferredHeaders;
-        const headerRows = hasHeadSection
-          ? [...table.querySelectorAll("thead tr")].filter(isVisible).length
-          : firstRowIsHeader ? 1 : 0;
-        const dataRows = rows.slice(headerRows);
-        return {
-          index: index + 1,
-          headers: headers.slice(0, 30),
-          rowCount: dataRows.length,
-          previewRows: dataRows.slice(0, 3).map((row) =>
-            [...row.querySelectorAll("th,td")]
-              .slice(0, 30)
-              .map((cell) => cleanText(cell.innerText || cell.textContent, 100))
-          )
-        };
-      });
-    const downloadTaskList = scanElementDownloadDialog();
-
-    const iframes = [...document.querySelectorAll("iframe")]
-      .slice(0, 32)
-      .map((frame, index) => {
-        const sourceUrl = frame.getAttribute("src") ? safeUrl(frame.src) : "";
-        let documentUrl = "";
-        try {
-          const rawDocumentUrl = frame.contentWindow?.location?.href;
-          documentUrl = rawDocumentUrl ? safeUrl(rawDocumentUrl) : "";
-        } catch {
-          // Cross-origin frame locations are intentionally not read.
-        }
-        return {
-          index: index + 1,
-          url: sourceUrl || documentUrl,
-          documentUrl,
-          title: cleanText(frame.title, 160),
-          name: cleanText(frame.getAttribute("name"), 120),
-          visible: isVisible(frame),
-          sandbox: frame.getAttribute("sandbox") || ""
-        };
-      });
 
     const visibleText = collectVisibleText();
     const names = [...links.map((item) => item.text), ...buttons.map((item) => item.text)];
     const inputLabels = inputs.map((item) => item.label).filter(Boolean);
     const loginControls = names.some((name) => /^(登录|立即登录|用户登录|商户登录)$/.test(name));
     const logoutControls = names.some((name) => /^(退出|退出登录|安全退出|注销)$/.test(name));
-    const businessNavigation = mainNavigation.length >= 2 ||
-      menus.some((name) => /账务|报表|交易|商户|数据|对账|结算|订单/.test(name));
+    const businessNavigation = mainNavigation.length >= 2;
     const accountLabelCue = [...document.querySelectorAll("label,th,td,dt,[class*=label i],[class*=name i]")]
       .filter(isVisible)
       .some((element) => /^(商户名称|商户号|商户编号|商户编码|当前商户|用户名)$/.test(
@@ -627,19 +414,12 @@
       isTopFrame,
       frameName: "",
       visibleText,
-      headings,
-      menuGroups,
       mainNavigation,
       businessEntries,
-      interactiveElements,
       merchant,
-      menus,
       buttons,
       links,
       inputs,
-      tables,
-      downloadTaskList,
-      iframes,
       signals: {
         hasPasswordInput: inputs.some((input) => input.type.toLowerCase() === "password"),
         loginControls,

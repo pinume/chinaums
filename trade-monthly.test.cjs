@@ -13,23 +13,27 @@ assert.equal(december.length, 12); assert.equal(december[11].end, '2026-12-31');
 const months = [{key: '2026-01', start: '2026-01-01', end: '2026-01-31'}, {key: '2026-02', start: '2026-02-01', end: '2026-02-28'}];
 async function run() {
   const calls = [];
+  let submitted = 0;
+  const tasks = [];
   await context.CHINAUMS_MONTHLY_RUNNER.run({
-    months, gate:{authentication:{status:'logged_in',confidence:'high'}}, merchantFromTasks:true,
+    months, gate:{authentication:{status:'logged_in',confidence:'high'}},
     checkpoint:async()=>{},sleep:async()=>{},transition:async()=>{},
     invoke:async operation=>{
       calls.push(operation);
       if(operation==='setDateRange')return{status:'set'};
-      if(operation==='query'||operation==='submitExport')return{status:'clicked'};
-      if(operation==='queryState')return{status:'ready',count:132};
+      if(operation==='snapshotExportTasks')return{status:'found',rows:[...tasks]};
+      if(operation==='submitExport'){ submitted++;tasks.push({id:String(submitted),fileName:`89813014812B1L3_MX_2026093012000${submitted}.xlsx`});return{status:'clicked'};}
+      if(operation==='query')return{status:'clicked'};
+      if(operation==='queryState')return{status:'ready',count:132,merchantNo:'89813014812B1L3'};
       if(operation==='classifySubmit')return{status:'accepted'};
       if(operation==='closeSubmitDialog')return{status:'closed'};
       throw new Error(operation);
     }
   });
-  assert.deepEqual(calls, Array(2).fill(['setDateRange','query','queryState','submitExport','classifySubmit','closeSubmitDialog']).flat());
+  assert.deepEqual(calls, Array(2).fill(['setDateRange','query','queryState','snapshotExportTasks','submitExport','classifySubmit','closeSubmitDialog','snapshotExportTasks']).flat());
   const emptyEvents = [];
   await context.CHINAUMS_MONTHLY_RUNNER.run({
-    months, gate: {}, merchantFromTasks: true,
+    months, gate: {},
     checkpoint: async () => {}, sleep: async () => {}, transition: async event => emptyEvents.push(event),
     invoke: async operation => {
       if (operation === 'setDateRange') return {status:'set'};
@@ -39,6 +43,6 @@ async function run() {
     }
   });
   assert.equal(emptyEvents.filter(event => event.status === 'NO_DATA').length, months.length);
-  console.log('PASS: monthly trade export closes success notice and immediately starts next month without opening task list');
+  console.log('PASS: monthly trade export closes success notice and binds each new server task before starting the next month');
 }
 run().catch(e=>{console.error(e);process.exitCode=1;});

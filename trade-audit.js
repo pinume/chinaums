@@ -41,6 +41,7 @@
     if (calendar) return calendar;
     input.blur();
     input.focus();
+    if (!findCalendar()) input.dispatchEvent(new Event("focus"));
     if (!findCalendar()) input.click();
     for (let attempt = 0; attempt < 30; attempt += 1) {
       calendar = findCalendar();
@@ -130,8 +131,12 @@
     .filter(Boolean);
   const classifySubmit = () => {
     const messages = dialogTexts();
-    if (messages.some((text) => /申请已提交/.test(text))) return { status: "accepted" };
-    if (messages.some((text) => /超过\s*12\s*条申请在处理中/.test(text))) return { status: "throttled" };
+    const accepted = messages.filter((text) => /申请已提交/.test(text));
+    if (accepted.length) {
+      const files = [...new Set(accepted.flatMap((text) => text.match(/MER_[A-Z0-9]+_\d{14}_yjhx\.xlsx/gi) || []))];
+      return { status: "accepted", fileName: files.length === 1 ? files[0] : null };
+    }
+    if (messages.some((text) => /超过\s*\d+\s*条申请在处理中/.test(text))) return { status: "throttled" };
     if (messages.some((text) => /(?:申请失败|导出失败|系统异常)/.test(text))) {
       return { status: "failed", message: messages.find((text) => /(?:申请失败|导出失败|系统异常)/.test(text)) };
     }
@@ -139,14 +144,9 @@
   };
   const statusCode = (status) => status === "待处理" ? "pending" : status === "处理成功" ? "ready" : "unknown";
 
-  const parseDownloadTaskList = () => {
-    const dialogs = [...document.querySelectorAll(".el-dialog")].filter(visible);
-    const dialog = dialogs.find((element) => normalize(textOf(element.querySelector(".el-dialog__title"))) === "下载暂存列表");
-    if (!dialog) return { status: "not_open" };
-    const totalMatch = textOf(dialog).match(/共\s*(\d+)\s*条(?:记录)?/);
-    const activePage = dialog.querySelector(".el-pagination .number.active");
+  const downloadTable = (dialog) => {
     const tables = [...dialog.querySelectorAll(".el-table")].filter(visible);
-    const table = tables.map((element) => {
+    return tables.map((element) => {
       const headers = [...element.querySelectorAll(".el-table__header-wrapper thead th, .el-table__header-wrapper [role=columnheader]")]
         .filter(visible)
         .map((cell) => clean(cell.querySelector(".cell")?.innerText || cell.innerText || cell.textContent, 100));
@@ -161,6 +161,26 @@
         }
       };
     }).find(({ columns }) => Object.values(columns).every((index) => index >= 0));
+  };
+
+  const reportComponent = () => [...document.querySelectorAll(".el-table")]
+    .filter((table) => !table.closest(".el-dialog"))
+    .map((table) => table.__vue__?.$parent)
+    .find((component) => component?.$options?.name === "table");
+  const queryMerchantIds = () => {
+    const rows = reportComponent()?.tableData;
+    if (!Array.isArray(rows) || !rows.length || rows.some((row) => !row.mchntId)) return [];
+    return [...new Set(rows.map((row) => normalize(row.mchntId)))];
+  };
+
+  const parseDownloadTaskList = () => {
+    if (queryBusy()) return { status: "loading" };
+    const dialogs = [...document.querySelectorAll(".el-dialog")].filter(visible);
+    const dialog = dialogs.find((element) => normalize(textOf(element.querySelector(".el-dialog__title"))) === "下载暂存列表");
+    if (!dialog) return { status: "not_open" };
+    const totalMatch = textOf(dialog).match(/共\s*(\d+)\s*条(?:记录)?/);
+    const activePage = dialog.querySelector(".el-pagination .number.active");
+    const table = downloadTable(dialog);
     if (!table) return { status: "parse_error", total: totalMatch ? Number(totalMatch[1]) : null, rows: [] };
 
     const body = table.element.querySelector(".el-table__body-wrapper");
@@ -304,8 +324,14 @@
           return { status: "no_data", count: count ?? 0 };
         }
         if (count !== null && currentResult.rows.length > 0 && exportButton && listButton) {
+          if (args.refreshDownloadList === true) return { status: "ready", count };
+          const merchants = queryMerchantIds();
+          if (merchants.length !== 1 || (args.targetMerchantId && merchants[0] !== args.targetMerchantId)) {
+            return { status: "failed", reason: "查询结果没有唯一商户身份或与本轮商户不一致；未申请导出。" };
+          }
           queryTracker.resultState = "ready";
-          return { status: "ready", count };
+          queryTracker.merchantId = merchants[0];
+          return { status: "ready", count, merchantId: merchants[0] };
         }
         return { status: "waiting" };
       }
@@ -317,6 +343,11 @@
         if (queryTracker?.resultState !== "ready" || resultCount() === null ||
           !exactButton("批量导出") || !exactButton("下载暂存列表")) {
           return { status: "blocked", reason: "查询结果未就绪，导出操作已锁定。" };
+        }
+        const merchants = queryMerchantIds();
+        if (gate?.allowed !== true || !args.targetMerchantId || gate.merchantId !== args.targetMerchantId ||
+          queryTracker.merchantId !== args.targetMerchantId || merchants.length !== 1 || merchants[0] !== args.targetMerchantId) {
+          return { status: "blocked", reason: "当前商户身份无法确认或已切换；未申请导出。" };
         }
         exactButton("批量导出").click();
         return { status: "clicked" };
@@ -335,8 +366,8 @@
         const scoped = candidates.filter((element) => {
           let parent = element;
           for (let depth = 0; parent && depth < 6; parent = parent.parentElement, depth += 1) {
-            if (dialogTexts().some((text) => /申请已提交|超过\s*12\s*条申请在处理中|申请失败|导出失败/.test(text)) &&
-              /申请已提交|超过\s*12\s*条申请在处理中|申请失败|导出失败/.test(textOf(parent))) return true;
+            if (dialogTexts().some((text) => /申请已提交|超过\s*\d+\s*条申请在处理中|申请失败|导出失败/.test(text)) &&
+              /申请已提交|超过\s*\d+\s*条申请在处理中|申请失败|导出失败/.test(textOf(parent))) return true;
           }
           return false;
         });
@@ -350,6 +381,29 @@
         if (!button) return { status: "controls_missing" };
         button.click();
         return { status: "clicked" };
+      }
+      case "snapshotExportTasks": {
+        const component = reportComponent();
+        if (!component?.$axiosApi?.axiosPromisePara) throw new Error("无法读取以旧换新暂存接口。");
+        const day = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+        const today = new Date();
+        const start = new Date(today); start.setDate(start.getDate() - 7);
+        const rows = [];
+        for (let current = 0; current < 100; current += 1) {
+          const response = await component.$axiosApi.axiosPromisePara({
+            searchObj: "1", size: 100, current,
+            beginApplyDate: `${day(start)} 00:00:00`, endApplyDate: `${day(today)} 23:59:59`
+          }, "uis-tradein-server/portal/yjhx/v3/qryExportDtls", {
+            headers: { userPortalToken: localStorage.getItem("userPortalVerifyToken") }
+          });
+          if (!response?.success || !Array.isArray(response.data?.list)) throw new Error("以旧换新暂存接口结构异常。");
+          rows.push(...response.data.list.map((row) => ({ id: String(row.id || ""), fileName: row.exportFileName })));
+          if (current + 1 >= Number(response.data.pages)) {
+            if (rows.length !== Number(response.data.total) || rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("以旧换新暂存任务分页不完整或身份重复。");
+            return { status: "found", rows };
+          }
+        }
+        throw new Error("以旧换新暂存任务页数超出读取范围。");
       }
       case "parseDownloadTasks":
         return parseDownloadTaskList();
@@ -403,15 +457,19 @@
           .filter(visible)
           .find((element) => normalize(textOf(element.querySelector(".el-dialog__title"))) === "下载暂存列表");
         if (!dialog) return { status: "not_open" };
-        const matches = [...dialog.querySelectorAll(".el-table__body-wrapper tbody > tr")]
+        const table = downloadTable(dialog);
+        if (!table) return { status: "parse_error", reason: "下载表头无法确认。" };
+        const matches = [...(table.element.querySelector(".el-table__body-wrapper")?.querySelectorAll("tbody > tr") || [])]
           .filter(visible)
-          .filter((row) => [...row.querySelectorAll("td")]
-            .some((cell) => clean(cell.querySelector(".cell")?.innerText || cell.innerText || cell.textContent, 240) === args.fileName));
+          .filter((row) => {
+            const cell = [...row.children][table.columns.fileName];
+            return clean(cell?.querySelector(".cell")?.innerText || cell?.innerText || cell?.textContent, 240) === args.fileName;
+          });
         if (matches.length !== 1) return { status: "unknown", reason: "目标文件行缺失或不唯一。" };
         const row = matches[0];
         const cells = [...row.children].filter((cell) => cell.tagName === "TD");
-        const status = clean(cells[2]?.querySelector(".cell")?.innerText || cells[2]?.innerText || cells[2]?.textContent, 80);
-        const downloadCell = cells[3];
+        const status = clean(cells[table.columns.status]?.querySelector(".cell")?.innerText || cells[table.columns.status]?.innerText || cells[table.columns.status]?.textContent, 80);
+        const downloadCell = cells[table.columns.operation];
         const controls = downloadCell ? [...downloadCell.querySelectorAll('a,button,[role="button"]')]
           .filter((element) => normalize(textOf(element)) === "下载") : [];
         if (status !== "处理成功" || controls.length !== 1 || controls[0].disabled || controls[0].classList.contains("is-disabled") ||
