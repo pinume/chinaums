@@ -1,0 +1,191 @@
+(() => {
+  const monthKey = (year, month) => `${year}-${String(month).padStart(2, "0")}`;
+  const formatDate = (year, month, day) => `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const daysInMonth = (year, month) => new Date(year, month, 0).getDate();
+
+  const makeMonthRange = (year, month, today = new Date()) => {
+    const lastDay = daysInMonth(year, month);
+    const isCurrentMonth = year === today.getFullYear() && month === today.getMonth() + 1;
+    return {
+      key: monthKey(year, month),
+      start: formatDate(year, month, 1),
+      end: formatDate(year, month, isCurrentMonth ? Math.min(lastDay, today.getDate()) : lastDay)
+    };
+  };
+
+  const yearToDateMonths = (today = new Date()) => Array.from(
+    { length: today.getMonth() + 1 },
+    (_, index) => makeMonthRange(today.getFullYear(), index + 1, today)
+  );
+
+  const run = async ({ months, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, reconcileUnknown, onMerchantVerified, merchantFromTasks = false }) => {
+    if (!Array.isArray(months) || !months.length) throw new Error("没有可执行的月份。");
+    const results = [];
+    let throttleAttempts = 0;
+    let activeMerchantNo = String(targetMerchantNo || gate?.merchantNo || "").replace(/[\s\u200B-\u200D\uFEFF]/g, "").toUpperCase();
+
+    const setMonthState = async (month, status, extra = {}) => {
+      const result = { month: month.key, status, ...extra };
+      results.push(result);
+      await transition(result);
+      return result;
+    };
+
+    for (const month of months) {
+      await checkpoint();
+      await transition({ month: month.key, status: "SETTING_DATE" });
+      const setDate = await invoke("setDateRange", { start: month.start, end: month.end });
+      if (setDate?.status !== "set") {
+        await setMonthState(month, "FAILED", { reason: setDate?.reason || "无法确认日期范围。" });
+        throw new Error(`${month.key} 日期设置失败：${setDate?.reason || "状态未确认"}`);
+      }
+
+      await transition({ month: month.key, status: "STARTING_QUERY" });
+      let query;
+      try {
+        query = await invoke("query", {});
+      } catch (error) {
+        const reason = `查询调用失败或超时：${error?.message || "页面未响应"}`;
+        await setMonthState(month, "FAILED", { reason });
+        throw new Error(`${month.key} 查询调用未能确认：${error?.message || "页面未响应"}`);
+      }
+      if (query?.status !== "clicked") {
+        await setMonthState(month, "FAILED", { reason: query?.reason || "查询按钮状态未确认。" });
+        throw new Error(`${month.key} 查询未能安全启动。`);
+      }
+      await transition({ month: month.key, status: "QUERYING" });
+
+      const queryDeadline = Date.now() + 120000;
+      let queryState = { status: "waiting" };
+      while (Date.now() < queryDeadline) {
+        await checkpoint();
+        queryState = await invoke("queryState", { targetMerchantNo: activeMerchantNo || null });
+        if (queryState?.status === "failed") {
+          await setMonthState(month, "FAILED", { reason: queryState.reason || "查询过程出现无法确认的状态。" });
+          throw new Error(`${month.key} 查询状态异常：${queryState.reason || "已停止"}`);
+        }
+        if (["ready", "no_data"].includes(queryState?.status)) break;
+        await sleep(1000);
+      }
+      if (!["ready", "no_data"].includes(queryState?.status)) {
+        await setMonthState(month, "FAILED", { reason: "两分钟内没有取得明确的查询完成状态；查询没有触发导出申请。" });
+        throw new Error(`${month.key} 查询结果状态无法确认；为防止错月导出，已暂停。`);
+      }
+      if (queryState.status === "ready" && !merchantFromTasks) {
+        const actualMerchantNo = String(queryState.merchantNo || "").replace(/\s/g, "").toUpperCase();
+        if (!actualMerchantNo) {
+          await setMonthState(month, "FAILED", { reason: "查询结果中没有唯一可确认的商户号；未申请导出。" });
+          throw new Error(`${month.key} 查询结果中没有唯一可确认的商户号；未申请导出。`);
+        }
+        if (activeMerchantNo && actualMerchantNo !== activeMerchantNo) {
+          await setMonthState(month, "FAILED", { reason: `查询结果商户号 ${actualMerchantNo} 与本轮已确认商户号 ${activeMerchantNo} 不一致；未申请导出。` });
+          throw new Error(`${month.key} 查询结果商户号与本轮已确认商户号不一致；未申请导出。`);
+        }
+        activeMerchantNo = actualMerchantNo;
+        try {
+          if (onMerchantVerified) await onMerchantVerified(activeMerchantNo);
+        } catch (error) {
+          await setMonthState(month, "FAILED", { reason: error?.message || "查询结果商户号核对未通过；未申请导出。" });
+          throw error;
+        }
+        gate.allowed = true;
+        gate.merchantNo = activeMerchantNo;
+        gate.source = "query-result";
+        await transition({ month: month.key, status: "QUERY_READY", count: queryState.count, merchantNo: activeMerchantNo });
+      }
+      if (queryState.status === "no_data") {
+        await setMonthState(month, "NO_DATA", { count: 0 });
+        throttleAttempts = 0;
+        continue;
+      }
+
+      let submitted = false;
+      while (!submitted) {
+        await checkpoint();
+        await transition({ month: month.key, status: "SUBMITTING" });
+        const attemptedAt = new Date().toISOString();
+        const submit = await invoke("submitExport", { gate, targetMerchantNo: activeMerchantNo });
+        if (submit?.status !== "clicked") {
+          await setMonthState(month, "FAILED", { reason: submit?.reason || "导出控件未通过门禁检查。" });
+          throw new Error(`${month.key} 导出已锁定：${submit?.reason || "控件状态未确认"}`);
+        }
+
+        const responseDeadline = Date.now() + 12000;
+        let response = { status: "unknown" };
+        while (Date.now() < responseDeadline) {
+          await checkpoint();
+          response = await invoke("classifySubmit", {});
+          if (response?.status !== "unknown") break;
+          await sleep(500);
+        }
+
+        if (response?.status === "accepted") {
+          await setMonthState(month, "SUBMITTED", { submittedAt: attemptedAt, count: queryState.count });
+          throttleAttempts = 0;
+          submitted = true;
+          let closed = { status: "unknown" };
+          for (let closeAttempt = 0; closeAttempt < 3; closeAttempt += 1) {
+            closed = await invoke("closeSubmitDialog", {});
+            if (closed?.status === "closed") break;
+            await sleep(350);
+          }
+          if (closed?.status !== "closed") {
+            throw new Error(`${month.key} 已确认服务器接受申请；本月已记为已提交，提示框关闭失败（${closed?.reason || closed?.status || "未知状态"}）。`);
+          }
+          continue;
+        }
+
+        if (response?.status === "throttled") {
+          const closed = await invoke("closeSubmitDialog", {});
+          if (closed?.status !== "closed") {
+            await setMonthState(month, "UNKNOWN", { reason: "识别到限流，但提示无法安全关闭。" });
+            throw new Error(`${month.key} 限流提示未能安全关闭，已暂停。`);
+          }
+          throttleAttempts += 1;
+          const waitMs = 30000;
+          await transition({ month: month.key, status: "WAITING_FOR_SLOT", retryInMs: waitMs, attempt: throttleAttempts });
+          const end = Date.now() + waitMs;
+          while (Date.now() < end) {
+            await checkpoint();
+            await sleep(Math.min(1000, end - Date.now()));
+          }
+          continue;
+        }
+
+        if (response?.status === "failed") {
+          const closed = await invoke("closeSubmitDialog", {});
+          await setMonthState(month, "FAILED", { reason: response.message || "服务器明确拒绝了申请。" });
+          if (closed?.status !== "closed") await transition({ month: month.key, status: "FAILED_DIALOG_REMAINS" });
+          throw new Error(`${month.key} 导出失败：${response.message || "服务器返回明确失败"}`);
+        }
+
+        await transition({ month: month.key, status: "UNKNOWN", attemptedAt });
+        const reconciliation = reconcileUnknown
+          ? await reconcileUnknown({ month, attemptedAt, gate, targetMerchantNo: activeMerchantNo })
+          : { status: "unknown" };
+        if (reconciliation?.status === "accepted") {
+          await setMonthState(month, "SUBMITTED", {
+            submittedAt: attemptedAt,
+            remoteCreatedAt: reconciliation.createdAt || null,
+            reconciled: true,
+            remoteFileName: reconciliation.fileName || null,
+            count: queryState.count
+          });
+          submitted = true;
+          throttleAttempts = 0;
+          continue;
+        }
+        await setMonthState(month, "UNKNOWN", { attemptedAt, reason: reconciliation?.reason || "服务端是否接受申请无法确认，禁止自动重提。" });
+        throw new Error(`${month.key} 提交结果 UNKNOWN；先核对暂存列表，不会自动重试。`);
+      }
+    }
+
+    return results;
+  };
+
+  globalThis.CHINAUMS_MONTHLY_RUNNER = Object.freeze({
+    makeMonthRange,
+    yearToDateMonths,
+    run
+  });
+})();

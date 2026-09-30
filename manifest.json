@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "银联商务助手",
+  "version": "0.2.0",
+  "description": "探测银联商务页面，并按当前登录商户运行对账导出。",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "clipboardWrite",
+    "downloads"
+  ],
+  "action": {
+    "default_title": "银联商务助手",
+    "default_popup": "popup.html"
+  }
+}

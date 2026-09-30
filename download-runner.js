@@ -1,0 +1,275 @@
+(() => {
+  const timestampFromFileName = (fileName, reportType, merchantNo) => {
+    const escapedMerchantNo = merchantNo ? merchantNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "[A-Z0-9]+";
+    const pattern = reportType === "trade-audit"
+      ? new RegExp(`^MER_${escapedMerchantNo}_(\\d{14})_yjhx\\.xlsx$`, "i")
+      : new RegExp(`^${escapedMerchantNo}_MX_(\\d{14})(?:_[^.]*)?\\.xlsx$`, "i");
+    const match = String(fileName || "").match(pattern);
+    if (!match) return null;
+    const stamp = match[1];
+    const date = new Date(
+      Number(stamp.slice(0, 4)),
+      Number(stamp.slice(4, 6)) - 1,
+      Number(stamp.slice(6, 8)),
+      Number(stamp.slice(8, 10)),
+      Number(stamp.slice(10, 12)),
+      Number(stamp.slice(12, 14))
+    );
+    return Number.isNaN(date.getTime()) ? null : date.getTime();
+  };
+
+  const timestampFromCreatedAt = (createdAt) => {
+    const match = String(createdAt || "").match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})/);
+    if (!match) return null;
+    const date = new Date(
+      Number(match[1]), Number(match[2]) - 1, Number(match[3]),
+      Number(match[4]), Number(match[5]), Number(match[6])
+    );
+    return Number.isNaN(date.getTime()) ? null : date.getTime();
+  };
+
+  const run = async ({
+    invoke,
+    reportType,
+    merchantNo,
+    onMerchantIdentified,
+    startedAt,
+    submittedMonths,
+    gate,
+    checkpoint,
+    sleep,
+    transition
+  }) => {
+    const expectedCount = submittedMonths.length;
+    if (!expectedCount) return [];
+    const requestedFiles = new Set(submittedMonths.map((month) => month.remoteFileName).filter(Boolean));
+    const startedAtMs = reportType === "trade-audit" ? Math.floor(new Date(startedAt).getTime() / 1000) * 1000 : new Date(startedAt).getTime();
+    if (Number.isNaN(startedAtMs)) throw new Error("本轮开始时间无效，不能筛选暂存任务。");
+
+    await transition({ status: "OPENING_DOWNLOAD_LIST" });
+    const opened = await invoke("openDownloadList", { gate, targetMerchantNo: merchantNo });
+    if (!new Set(["clicked", "already_open"]).has(opened?.status)) {
+      throw new Error(`无法安全打开下载暂存列表（${opened?.status || "无返回状态"}）：${opened?.reason || "页面操作未能确认"}；本轮已提交任务保留在远端。`);
+    }
+
+    let consecutiveParseErrors = 0;
+    let lastList = null;
+    let rejected = {};
+    const parseTasks = async () => {
+      const list = await invoke("parseDownloadTasks", {});
+      lastList = list;
+      if (list?.status === "parse_error") {
+        consecutiveParseErrors += 1;
+        if (consecutiveParseErrors >= 4) {
+          throw new Error("下载暂存列表结构与已确认表头不符；为避免点错文件，自动下载已停止。");
+        }
+      } else {
+        consecutiveParseErrors = 0;
+      }
+      return list;
+    };
+
+    const waitForDownloadList = async () => {
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        await checkpoint();
+        const list = await parseTasks();
+        if (["found", "empty"].includes(list?.status)) return;
+        await sleep(200);
+      }
+      throw new Error(`暂存列表打开后未能读取（${lastList?.status || "unknown"}）；本轮已提交任务保留在远端。`);
+    };
+    await waitForDownloadList();
+
+    const scanCurrentRunTasks = async () => {
+      rejected = { fileName: 0, createdAt: 0, beforeRun: 0 };
+      if (reportType === "account-detail") {
+        const pageSize = await invoke("setDownloadPageSize", {});
+        if (pageSize?.status === "set") await sleep(500);
+      }
+      let list = await parseTasks();
+      if (!["found", "empty"].includes(list?.status)) return null;
+      let currentPage = Number(list.page) || 1;
+      if (currentPage !== 1) {
+        const selected = await invoke("selectDownloadPage", { page: 1 });
+        if (selected?.status !== "clicked" && selected?.status !== "already_current") return null;
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          await checkpoint();
+          list = await parseTasks();
+          if (Number(list?.page) === 1) break;
+          await sleep(200);
+        }
+        if (Number(list?.page) !== 1) return null;
+      }
+
+      const collected = new Map();
+      let lastTotal = list.total ?? null;
+      for (let pageAttempt = 0; pageAttempt < 100; pageAttempt += 1) {
+        await checkpoint();
+        list = await parseTasks();
+        if (!["found", "empty"].includes(list?.status)) return null;
+        currentPage = Number(list.page) || (pageAttempt + 1);
+        if (list.total !== null && list.total !== undefined) lastTotal = list.total;
+
+        for (const row of list.rows || []) {
+          const fileTimestamp = timestampFromFileName(row.fileName, reportType, merchantNo);
+          const createdTimestamp = timestampFromCreatedAt(row.createdAt);
+          if (fileTimestamp === null) { rejected.fileName += 1; continue; }
+          if (createdTimestamp === null) { rejected.createdAt += 1; continue; }
+          if (requestedFiles.size === expectedCount ? !requestedFiles.has(row.fileName) : (fileTimestamp < startedAtMs || createdTimestamp < startedAtMs)) { rejected.beforeRun += 1; continue; }
+          if (!collected.has(row.fileName)) collected.set(row.fileName, {
+            ...row,
+            page: currentPage,
+            fileTimestamp,
+            createdTimestamp
+          });
+        }
+
+        if (collected.size > expectedCount) {
+          throw new Error("本轮商户号与开始时间筛出了多于成功提交月份数的任务；为避免下载错误文件，已暂停。" +
+            (lastTotal === null ? "" : ` 暂存列表共有 ${lastTotal} 条任务。`));
+        }
+        if (collected.size === expectedCount || list.hasNext !== true) break;
+
+        const oldPage = currentPage;
+        const next = await invoke("nextDownloadPage", {});
+        if (next?.status !== "clicked") break;
+        const deadline = Date.now() + 5000;
+        let arrived = false;
+        while (Date.now() < deadline) {
+          await checkpoint();
+          const after = await parseTasks();
+          if (Number(after?.page) > oldPage) { arrived = true; break; }
+          await sleep(200);
+        }
+        if (!arrived) break;
+      }
+      return [...collected.values()].sort((left, right) =>
+        left.fileTimestamp - right.fileTimestamp || left.createdTimestamp - right.createdTimestamp
+      );
+    };
+
+    const generationDeadline = startedAtMs + 6 * 24 * 60 * 60 * 1000;
+    const orderedMonths = [...submittedMonths].sort((left, right) => left.submittedAt.localeCompare(right.submittedAt));
+    const downloaded = new Set(submittedMonths.map((month) => month.downloadedFileName).filter(Boolean));
+    let associatedTasks = [];
+    let tasks = [];
+    while (true) {
+      await checkpoint();
+      const scanned = await scanCurrentRunTasks();
+      tasks = scanned || [];
+      if (tasks.length === expectedCount) {
+        if (reportType === "trade-audit" && !merchantNo) {
+          const merchants = [...new Set(tasks.map((task) => task.fileName.match(/^MER_([A-Z0-9]+)_/i)?.[1]?.toUpperCase()))];
+          if (merchants.length !== 1 || !merchants[0]) throw new Error("本轮暂存任务包含多个商户或商户号无法确认，停止下载。");
+          merchantNo = merchants[0];
+          gate.allowed = true;
+          gate.merchantNo = merchantNo;
+          if (onMerchantIdentified) await onMerchantIdentified(merchantNo);
+        }
+        associatedTasks = tasks.map((task, index) => ({
+          ...task,
+          month: (orderedMonths.find((month) => month.remoteFileName === task.fileName) || orderedMonths[index])?.month || orderedMonths[index]?.key || null,
+          submitOrder: index + 1
+        }));
+
+        for (const task of associatedTasks) {
+          if (downloaded.has(task.fileName) || task.statusCode !== "ready" || task.downloadEnabled !== true) continue;
+          await checkpoint();
+          const currentList = await parseTasks();
+          if (Number(currentList?.page) !== task.page) {
+            const selected = await invoke("selectDownloadPage", { page: task.page });
+            if (selected?.status !== "clicked" && selected?.status !== "already_current") {
+              throw new Error(`无法回到暂存任务所在的第 ${task.page} 页；未点击该文件。`);
+            }
+            const deadline = Date.now() + 5000;
+            let arrived = false;
+            while (Date.now() < deadline) {
+              await checkpoint();
+              const current = await parseTasks();
+              if (Number(current?.page) === task.page) { arrived = true; break; }
+              await sleep(200);
+            }
+            if (!arrived) throw new Error("暂存列表翻页结果无法确认，停止下载。");
+          }
+          const requestedAt = new Date().toISOString();
+          const requested = await invoke("downloadTask", { fileName: task.fileName, gate, targetMerchantNo: merchantNo });
+          if (requested?.status !== "download_requested") {
+            throw new Error(`任务 ${task.fileName} 未通过行内状态复核，停止后续下载。`);
+          }
+          await transition({ status: "DOWNLOAD_REQUESTED", fileName: task.fileName, month: task.month, submitOrder: task.submitOrder });
+          const completed = await invoke("confirmDownload", { fileName: task.fileName, requestedAt });
+          if (completed?.status !== "download_completed") throw new Error(`文件 ${task.fileName} 的下载完成状态无法确认；停止后续下载。`);
+          downloaded.add(task.fileName);
+          await transition({ status: "DOWNLOAD_COMPLETED", fileName: task.fileName, month: task.month, downloadId: completed.downloadId });
+          await sleep(5000);
+        }
+      }
+      if (downloaded.size === expectedCount) break;
+      if (Date.now() >= generationDeadline) {
+        throw new Error("本轮任务未能在暂存文件保留期限前全部生成；自动流程停止，请手动核对。 ");
+      }
+      const readyCount = tasks.filter((task) => task.statusCode === "ready" && task.downloadEnabled === true).length;
+      await transition({ status: "WAITING_GENERATION", found: tasks.length, ready: readyCount, expected: expectedCount,
+        listStatus: lastList?.status || "unknown", parsedRows: lastList?.rows?.length || 0, rejected });
+      await sleep(10000);
+      await checkpoint();
+      const closed = await invoke("closeDownloadList", {});
+      if (!["closed", "already_closed"].includes(closed?.status)) {
+        throw new Error("无法关闭暂存列表以更新任务状态；已停止自动下载。");
+      }
+      const closeDeadline = Date.now() + (reportType === "trade-audit" ? 30000 : 5000);
+      let closeAttempts = 1;
+      let lastCloseStatus = closed.status;
+      let lastListStatus;
+      let listClosed = closed.status === "already_closed";
+      while (!listClosed) {
+        await checkpoint();
+        const list = await invoke("parseDownloadTasks", {});
+        lastListStatus = list?.status || "unknown";
+        if (["not_found", "not_open"].includes(list?.status)) { listClosed = true; break; }
+        if (reportType === "trade-audit" && closeAttempts < 3) {
+          await sleep(1000);
+          const retry = await invoke("closeDownloadList", {});
+          closeAttempts += 1;
+          lastCloseStatus = retry?.status || "unknown";
+          if (lastCloseStatus === "already_closed") { listClosed = true; break; }
+          if (lastCloseStatus !== "closed") break;
+          continue;
+        }
+        if (Date.now() >= closeDeadline) break;
+        await sleep(200);
+      }
+      if (!listClosed) throw new Error(`暂存列表关闭结果无法确认（关闭返回 ${lastCloseStatus}，列表状态 ${lastListStatus}，尝试 ${closeAttempts} 次）；已停止自动下载。`);
+      if (reportType === "trade-audit") {
+        const query = await invoke("query", {});
+        if (query?.status !== "clicked") throw new Error("刷新下载状态前无法启动查询；已停止自动下载。");
+        const queryDeadline = Date.now() + 120000;
+        let result;
+        while (Date.now() < queryDeadline) {
+          await checkpoint();
+          result = await invoke("queryState", { refreshDownloadList: true });
+          if (result?.status === "failed") throw new Error(`刷新查询失败：${result.reason || "查询状态异常"}`);
+          if (["ready", "no_data"].includes(result?.status)) break;
+          await sleep(1000);
+        }
+        if (!["ready", "no_data"].includes(result?.status)) throw new Error("刷新查询两分钟内未就绪；已停止自动下载。");
+      }
+      const reopened = await invoke("openDownloadList", { gate, targetMerchantNo: merchantNo });
+      if (reopened?.status !== "clicked") {
+        throw new Error(`无法重新打开暂存列表以更新任务状态（${reopened?.status || "无返回状态"}）：${reopened?.reason || "页面操作未能确认"}；已停止自动下载。`);
+      }
+      await waitForDownloadList();
+    }
+
+    await transition({ status: "DOWNLOAD_REQUESTS_SENT", count: associatedTasks.length });
+    const closed = await invoke("closeDownloadList", {});
+    if (!new Set(["closed", "already_closed"]).has(closed?.status)) {
+      throw new Error("本轮下载请求已触发，但暂存列表右上角未能安全关闭；请手动关闭列表并检查 Chrome 下载记录。");
+    }
+    return associatedTasks;
+  };
+
+  globalThis.CHINAUMS_DOWNLOAD_RUNNER = Object.freeze({ run });
+})();
