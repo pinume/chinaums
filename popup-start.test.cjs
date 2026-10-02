@@ -9,7 +9,7 @@ const context = vm.createContext({URL,
   routeForUrl: () => ({kind:'portal_page'}),refreshExportTestButton:async()=>{},window:{close(){}},
   chrome:{tabs:{query:async()=>[{id:7,url:'https://service.chinaums.com/uisportal/accountCheckDetailQry/toDetail'}],create:async args=>urls.push(new URL(args.url))},runtime:{getURL:path=>'chrome-extension://test/'+path}}
 });
-vm.runInContext(source.slice(source.indexOf('const startExport ='),source.indexOf('elements.detailsButton.addEventListener')),context);
+vm.runInContext(source.slice(source.indexOf('const startExport ='),source.indexOf('showUnsavedPageState().finally')),context);
 (async()=>{
   await listeners.detail();await listeners.trade();
   assert.equal(urls[0].searchParams.get('reportType'),'account-detail');

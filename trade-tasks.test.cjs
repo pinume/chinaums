@@ -7,9 +7,9 @@ class Element {
   querySelectorAll() {return [];}
   querySelector(s) {return this.querySelectorAll(s)[0] || null;}
   getAttribute() {return null;}
-  closest() {return null;}
+  closest(selector) {return selector === '.el-dialog__wrapper' ? this.wrapper || null : null;}
 }
-let clicked = 0, ready = false, hidden = false, opening = 0;
+let clicked = 0, ready = false, hidden = false, opening = 0, loading = false;
 let now = new Date(2026,8,30,18,13,40).getTime();
 const steps = [];
 const clock = class extends Date { static now() { return now; } };
@@ -27,8 +27,8 @@ const table = new Element();table.querySelectorAll = s => s.includes('thead th')
 const dialog = new Element('共 146 条'); dialog.querySelectorAll = s => s === '.el-dialog__title' ? [new Element('下载暂存列表')] : s === '.el-table' ? [table] : s === '.el-pagination .number.active' ? [new Element('1')] : s === '.el-table__body-wrapper tbody > tr' ? [row] : [];
 const wrapper = new Element(); dialog.parentElement = wrapper;
 const input = new Element(); input.value = '2026/09/01 ~ 2026/09/30';
-const query = new Element('查询'); query.click = () => { assert(hidden); steps.push('query'); ready = true; };
-const launch = new Element('下载暂存列表'); launch.click = () => { steps.push('open'); hidden = false; opening = 2; };
+const query = new Element('查询'); query.click = () => { throw new Error('下载状态刷新不应重新查询交易'); };
+const launch = new Element('下载暂存列表'); launch.click = () => { steps.push('open'); hidden = false; opening = 2; if(closeClicks > 1) ready = true; };
 let closeClicks = 0;
 const close = new Element('×'); close.click = () => { steps.push('close'); closeClicks++; if(closeClicks > 1) hidden = true; };
 const oldDialogQuery = dialog.querySelectorAll;
@@ -39,6 +39,7 @@ const context = vm.createContext({Element, Date:clock, getComputedStyle: element
   if (s === 'input.deal-date') return [input];
   if (s === 'button') return [query, launch, new Element('批量导出')];
   if (s === '.el-table__body-wrapper tbody > tr') return [row];
+  if (s === '.el-loading-mask,.layui-layer-loading,.loading' && loading) return [new Element()];
   return [];
 }}});
 vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
@@ -56,6 +57,13 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   assert.equal((await adapter('downloadTask',args)).status,'download_requested');assert.equal(clicked,1);
   assert.equal((await adapter('downloadTask',{...args,fileName:fileName.replace('B1L3','B06R')})).status,'blocked');assert.equal(clicked,1);
   hidden = true; assert.equal((await adapter('parseDownloadTasks')).status,'not_open');
+  loading = true;
+  assert.equal((await adapter('parseDownloadTasks')).status,'not_open');
+  assert.equal((await adapter('openDownloadList')).status,'clicked', 'page loading must not imply an open download dialog');
+  opening = 0;
+  assert.equal((await adapter('openDownloadList')).status,'already_open');
+  assert.deepEqual(steps,['open']);
+  loading = false; hidden = true; steps.length = 0;
   vm.runInContext(fs.readFileSync(__dirname+'/download-runner.js','utf8'), context);
   ready = false; clicked = 0;
   await context.CHINAUMS_DOWNLOAD_RUNNER.run({
@@ -69,7 +77,30 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
       return adapter(op,params);
     }
   });
-  assert.deepEqual(steps,['open','close','close','query','open','download','complete','close']);
+  assert.deepEqual(steps,['open','close','close','open','download','complete','close']);
   assert.equal(clicked,1); assert(hidden);
-  console.log('PASS: actual Element table layout, pending/disabled, successful downloads and foreign merchant rejection');
+  // 真实后台页面：组件已关闭，但离场动画使 DOM 仍有布局且 opacity 为 1。
+  hidden = false;
+  const component = {$options:{name:'ElDialog'},visible:false,$nextTick:async()=>{}};
+  wrapper.__vue__ = {$parent:component}; dialog.wrapper = wrapper;
+  assert.equal((await adapter('parseDownloadTasks')).status,'not_open');
+  assert.equal((await adapter('closeDownloadList')).status,'already_closed');
+  assert.equal((await adapter('downloadTask',args)).status,'not_open');
+  loading = true;
+  assert.equal((await adapter('parseDownloadTasks')).status,'not_open', 'a loading mask must not resurrect a closed dialog');
+  loading = false;
+  const originalLaunch = launch.click;
+  launch.click = () => {component.visible = true; originalLaunch(); opening = 0;};
+  assert.equal((await adapter('openDownloadList')).status,'clicked', 'closed component must be reopened despite residual visible DOM');
+  assert.equal((await adapter('parseDownloadTasks')).status,'found');
+  const originalClose = close.click;
+  close.click = () => {component.visible = false; originalClose(); hidden = false;};
+  assert.equal((await adapter('closeDownloadList')).status,'closed');
+  assert.equal((await adapter('parseDownloadTasks')).status,'not_open');
+  component.visible = true;
+  close.click = () => {};
+  assert.equal((await adapter('closeDownloadList')).status,'blocked', 'an ignored close click must never claim closure');
+  component.visible = false; wrapper.__vue__ = component;
+  assert.equal((await adapter('parseDownloadTasks')).status,'not_open', 'the wrapper may point directly to ElDialog after transition');
+  console.log('PASS: loading-safe dialog opening, actual Element table layout, pending/disabled, successful downloads and foreign merchant rejection');
 })().catch(e => {console.error(e);process.exitCode = 1;});

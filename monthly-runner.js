@@ -46,6 +46,7 @@
       try {
         query = await invoke("query", {});
       } catch (error) {
+        if (error?.message === "STOPPED_BY_USER") throw error;
         const reason = `查询调用失败或超时：${error?.message || "页面未响应"}`;
         await setMonthState(month, "FAILED", { reason });
         throw new Error(`${month.key} 查询调用未能确认：${error?.message || "页面未响应"}`);
@@ -119,6 +120,7 @@
         try {
           submit = await invoke("submitExport", { gate, targetMerchantNo: activeMerchantNo, targetMerchantId: activeMerchantId });
         } catch (error) {
+          if (error?.message === "STOPPED_BY_USER") throw error;
           submit = { status: "unknown", reason: error?.message || "提交调用未响应" };
         }
         if (["blocked", "wrong_page", "controls_missing"].includes(submit?.status)) {
@@ -133,6 +135,7 @@
           try {
             response = await invoke("classifySubmit", {});
           } catch (error) {
+            if (error?.message === "STOPPED_BY_USER") throw error;
             response = { status: "unknown", reason: error?.message || "提交结果未响应" };
             break;
           }
@@ -186,7 +189,7 @@
             throw new Error(`${month.key} 限流提示未能安全关闭，已暂停。`);
           }
           throttleAttempts += 1;
-          const waitMs = 30000;
+          const waitMs = Math.min(30000 * 2 ** (throttleAttempts - 1), 120000);
           await transition({ month: month.key, status: "WAITING_FOR_SLOT", retryInMs: waitMs, attempt: throttleAttempts });
           const end = Date.now() + waitMs;
           while (Date.now() < end) {
@@ -208,6 +211,7 @@
         try {
           if (reconcileUnknown) reconciliation = await reconcileUnknown({ month, attemptedAt, gate, targetMerchantNo: activeMerchantNo });
         } catch (error) {
+          if (error?.message === "STOPPED_BY_USER") throw error;
           reconciliation.reason = error?.message || "未知申请对账失败";
         }
         if (reconciliation?.status === "accepted") {

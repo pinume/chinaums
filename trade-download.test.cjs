@@ -19,6 +19,6 @@ const clicked = [], completed = [], delays = [];
     if(op==='closeDownloadList'){opened=false;return{status:'closed'};}
     throw new Error(op);
   }});
-  assert.equal(nextCalls,1);assert.equal(clicked.length,12);assert.equal(new Set(clicked).size,12);assert.deepEqual(clicked,tasks.map(t=>t.fileName));assert.equal(completed[0],'2026-01');assert.equal(completed[11],'2026-12');assert.equal(delays.filter(ms=>ms===5000).length,12);assert.equal(opened,false);
-  console.log('PASS: trade 12 exact task files across two pages with delayed row updates, second precision, sequential completion and 5-second gaps');
+  assert.equal(nextCalls,1);assert.equal(clicked.length,12);assert.equal(new Set(clicked).size,12);assert.deepEqual(clicked,tasks.map(t=>t.fileName));assert.equal(completed[0],'2026-01');assert.equal(completed[11],'2026-12');assert.equal(delays.filter(ms=>ms>=1000).length,0,'ready files must not incur a fixed pacing delay');assert.equal(opened,false);
+  console.log('PASS: trade 12 exact task files across two pages with delayed row updates, second precision, sequential completion without fixed gaps');
 })().catch(e=>{if (mixed) {assert.match(e.message,/多个商户/);assert.equal(clicked.length,0);console.log("PASS: mixed merchant tasks stop before any download");} else {console.error(e);process.exitCode=1;}}).finally(()=>{Date.now=originalNow;});

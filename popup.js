@@ -4,41 +4,13 @@ if (!SITE_CONFIG) throw new Error("银联商务站点配置未加载。");
 const TARGET_HOST = SITE_CONFIG.host;
 const PORTAL_ROOT = SITE_CONFIG.portalRoot;
 
-const PAGE_ROUTES = SITE_CONFIG.pageRoutes;
-
 const elements = {
   site: document.querySelector("#site-status"),
   login: document.querySelector("#login-status"),
   merchant: document.querySelector("#merchant-name"),
-  category: document.querySelector("#page-category"),
-  reason: document.querySelector("#status-reason"),
   startExportTestButton: document.querySelector("#start-export-test-button"),
   startTradeExportButton: document.querySelector("#start-trade-export-button"),
-  detailsButton: document.querySelector("#details-button") || { addEventListener: () => {} },
   error: document.querySelector("#error-message")
-};
-
-const friendlyPageName = (rawUrl) => {
-  try {
-    const url = new URL(rawUrl);
-    if (url.search.includes("auditOfTrade2026") || url.hash.includes("auditOfTrade2026") || url.pathname.includes("auditOfTrade2026")) {
-      return "以旧换新采集 2026";
-    }
-    if (url.pathname.includes("accountCheckDetailQry/toDetail")) {
-      return "对账明细查询";
-    }
-    if (url.pathname.includes("index_r")) {
-      return "首页";
-    }
-    if (url.pathname.includes("qryCRealTimeTrans/toCRealTimeTrans")) {
-      return "实时交易查询";
-    }
-    const cat = routeCategory(rawUrl)?.category;
-    if (cat) return cat;
-    return "银联商务门户";
-  } catch {
-    return "银联商务页面";
-  }
 };
 
 const routeForUrl = (rawUrl) => {
@@ -64,21 +36,6 @@ const routeForUrl = (rawUrl) => {
 };
 
 const isScannableTargetUrl = (rawUrl) => ["portal_page", "business_frame_page"].includes(routeForUrl(rawUrl).kind);
-const matchesPath = (path, route) => {
-  if (route.exact) return path === route.exact;
-  return path === route.prefix || path.startsWith(`${route.prefix}/`);
-};
-
-const routeCategory = (rawUrl) => {
-  try {
-    const url = new URL(rawUrl);
-    if (url.hostname !== TARGET_HOST) return null;
-    return PAGE_ROUTES.find((route) => matchesPath(url.pathname, route)) || null;
-  } catch {
-    return null;
-  }
-};
-
 const dedupeBy = (items, keyOf) => {
   const seen = new Set();
   return items.filter((item) => {
@@ -154,7 +111,7 @@ const sameDocumentUrl = (left, right) => {
   }
 };
 
-const makeSnapshot = (injectionResults, injectionNote, tabUrl) => {
+const makeSnapshot = (injectionResults, tabUrl) => {
   const collectedFrames = injectionResults
     .map((entry) => entry.result ? { ...entry.result, frameId: entry.frameId } : null)
     .filter(Boolean);
@@ -196,7 +153,6 @@ const makeSnapshot = (injectionResults, injectionNote, tabUrl) => {
 };
 
 const injectAndScan = async (tabId) => {
-  let injectionNote = "";
   const scanConfig = {
     host: SITE_CONFIG.host,
     portalRoot: SITE_CONFIG.portalRoot,
@@ -217,19 +173,13 @@ const injectAndScan = async (tabId) => {
       target: { tabId, allFrames: true },
       files: ["content.js"]
     });
-  } catch (allFramesError) {
-    injectionNote = `部分 frame 无法注入：${allFramesError.message || "权限或页面状态不允许注入"}`;
-  }
+  } catch {}
 
   try {
-    const results = await scanInFrames(true);
-    return { results, injectionNote };
-  } catch (allFramesError) {
-    const scanNote = `全帧读取不完整：${allFramesError.message || "部分 frame 当前不可访问"}`;
-    injectionNote = [injectionNote, scanNote].filter(Boolean).join("；");
+    return await scanInFrames(true);
+  } catch {
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
-    const results = await scanInFrames(false);
-    return { results, injectionNote };
+    return scanInFrames(false);
   }
 };
 
@@ -239,7 +189,6 @@ const setLoginDisplay = (authentication) => {
   elements.login.className = authentication?.status === "logged_in"
     ? "status-positive"
     : authentication?.status === "logged_out" ? "status-negative" : "";
-  if (elements.reason) elements.reason.textContent = "";
 };
 
 const setMerchantDisplay = (merchant) => {
@@ -254,9 +203,6 @@ const renderSummary = (snapshot) => {
   }
   setLoginDisplay(snapshot?.authentication);
   setMerchantDisplay(snapshot?.merchant);
-  if (elements.category) {
-    elements.category.textContent = friendlyPageName(snapshot?.page?.url);
-  }
 };
 
 const renderRouteOnly = (tab) => {
@@ -266,9 +212,6 @@ const renderRouteOnly = (tab) => {
     elements.site.className = route.recognized ? "status-positive" : "status-negative";
   }
   if (elements.merchant) elements.merchant.textContent = "检测中…";
-  if (elements.category) {
-    elements.category.textContent = friendlyPageName(tab?.url || "");
-  }
 
   if (route.kind === "login_page") {
     setLoginDisplay({
@@ -290,8 +233,8 @@ const showUnsavedPageState = async () => {
     renderRouteOnly(tab);
     if (!isScannableTargetUrl(tab.url)) return;
 
-    const { results, injectionNote } = await injectAndScan(tab.id);
-    const snapshot = makeSnapshot(results, injectionNote, tab.url);
+    const results = await injectAndScan(tab.id);
+    const snapshot = makeSnapshot(results, tab.url);
     await chrome.storage.local.set({ [STORAGE_KEY]: snapshot });
     renderSummary(snapshot);
   } catch (error) {
@@ -322,7 +265,5 @@ const startExport = async (reportType) => {
 
 elements.startExportTestButton.addEventListener("click", () => startExport("account-detail"));
 elements.startTradeExportButton.addEventListener("click", () => startExport("trade-audit"));
-
-elements.detailsButton.addEventListener("click", () => {});
 
 showUnsavedPageState().finally(refreshExportTestButton);

@@ -14,6 +14,10 @@
     </header>
 
     <main class="prepare-content">
+      <section id="export-result" class="export-result" role="status" aria-atomic="true" hidden>
+        <h2 id="export-result-title"></h2>
+        <p id="export-result-message"></p>
+      </section>
       <section class="overview-card">
         <div class="detail-row"><span class="detail-label">运行状态</span><strong id="export-status">等待启动</strong></div>
         <div class="detail-row"><span class="detail-label">当前步骤</span><span id="export-stage">检查当前登录会话</span></div>
@@ -27,14 +31,13 @@
           <button id="export-stop" class="secondary-button" type="button" disabled>停止</button>
           <button id="export-close" class="secondary-button" type="button" disabled>关闭此页</button>
         </div>
-        <p id="export-error" class="error-message" role="alert"></p>
       </section>
 
       <section class="overview-card prepare-log-card">
         <h2>执行记录</h2>
         <ol id="export-log" class="prepare-log"></ol>
       </section>
-      <p class="privacy-note">沿用当前登录会话，不选择或切换商户。对账明细从查询结果识别商户号；以旧换新从本轮新申请的文件名识别商户号。先下载已生成的文件，每份确认完成后等待 5 秒再下载下一份；未生成的文件等待列表更新。</p>
+      <p class="privacy-note">沿用当前登录会话，不选择或切换商户。对账明细从查询结果识别商户号；以旧换新从本轮新申请的文件名识别商户号。连续下载本轮已生成的文件，每份确认完成后立即下载下一份；未生成的文件等待列表更新。</p>
     </main>
     <script src="site-config.js"></script>
     <script src="auth.js"></script>

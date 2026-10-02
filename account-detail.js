@@ -79,7 +79,7 @@
     const matches = [...document.querySelectorAll("#crtt_download_xlsx")].filter(visible);
     return matches.length === 1 && !matches[0].disabled ? matches[0] : null;
   };
-  const modalSelector = '[role="dialog"],[aria-modal="true"],.layui-layer,.layui-layer-dialog,.layui-layer-content,.modal,.modal-dialog,.el-dialog__wrapper,.el-dialog,.el-message-box__wrapper,.el-message-box,.placeLoad-row';
+  const modalSelector = '[role="dialog"],[aria-modal="true"],.layui-layer,.layui-layer-dialog,.layui-layer-content,.modal,.modal-dialog,.el-dialog__wrapper,.el-dialog,.el-message-box__wrapper,.el-message-box,.placeLoad-row,.openAlert';
   const visibleModals = () => [...document.querySelectorAll(modalSelector)].filter(visible);
   const downloadDialogs = () => [...document.querySelectorAll(".loadSave-row")].filter(visible)
     .filter((dialog) => {
@@ -227,8 +227,7 @@
           baseline: resultSignature(),
           observedLoading: false,
           candidate: null,
-          candidateSince: 0,
-          startedAt: Date.now()
+          candidateSince: 0
         };
         control.click();
         return { status: "clicked" };

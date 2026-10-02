@@ -3,10 +3,11 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const trade = process.argv.includes("trade-audit");
+const stopAtSubmit = process.argv.includes("STOPPED");
 const elements = new Map();
 const element = (selector) => {
   if (!elements.has(selector)) elements.set(selector, {
-    addEventListener() {}, append() {}, scrollIntoView() {}
+    listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; }, setAttribute() {}, append() {}, scrollIntoView() {}
   });
   return elements.get(selector);
 };
@@ -31,13 +32,15 @@ const prior = {
 prior.months[months[0].key].downloadStatus = "REQUESTED";
 prior.months[months[0].key].downloadedFileName = "already-clicked.xlsx";
 context.CHINAUMS_AUTH = { classify: () => ({ status: "logged_in", confidence: "high" }) };
-context.CHINAUMS_MONTHLY_RUNNER = {
+if (!stopAtSubmit) context.CHINAUMS_MONTHLY_RUNNER = {
   yearToDateMonths: context.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths,
   run: async (args) => {
     assert.equal(args.months.length, months.length);
     assert.equal(args.targetMerchantNo, undefined);
     assert(Object.values(latest.months).every((month) => month.status === "PENDING"));
     await args.onMerchantVerified(merchantNo);
+    await args.transition({ month: months[0].key, status: "WAITING_FOR_SLOT", retryInMs: 60000, attempt: 2 });
+    assert(latest.logs.some(log => log.includes("第 2 次") && log.includes("60 秒")));
     for (const month of args.months) await args.transition({ month: month.key, status: "SUBMITTED", submittedAt: new Date().toISOString() });
   }
 };
@@ -54,7 +57,11 @@ context.CHINAUMS_DOWNLOAD_RUNNER = { run: async (args) => {
   assert.equal(args.submittedMonths.length, months.length);
   assert.equal(args.submittedMonths[0].downloadedFileName, null, "legacy click records must not count as completed");
   await args.transition({ status: "WAITING_GENERATION", found: 0, expected: months.length, ready: 0 });
+  await args.transition({ status: "WAITING_GENERATION", found: 0, expected: months.length, ready: 0, waitedMs: 125000, remaining: 3 });
+  assert.match(latest.stage, /已等待 2 分 5 秒，剩余 3 个文件未下载/);
+  assert.match(elements.get("#export-stage").textContent, /可暂停或停止/);
   await args.transition({ status: "WAITING_GENERATION", found: 0, expected: months.length, ready: 0 });
+  for (const month of args.submittedMonths) await args.transition({status: "DOWNLOAD_COMPLETED", month: month.month, fileName: `${month.month}.xlsx`, downloadId: 7});
 } };
 const tab = { id: 1, url: trade ? "https://service.chinaums.com" + context.CHINAUMS_SITE_CONFIG.reportRoutes.tradeAuditPortal : "https://service.chinaums.com/uisportal/accountCheckDetailQry/toDetail", status: "complete" };
 context.chrome = {
@@ -66,7 +73,8 @@ context.chrome = {
     set: async (value) => {
       if (value.archivedExportRuns) archived = value.archivedExportRuns;
       if (value.activeExportRun) latest = value.activeExportRun;
-      if (["COMPLETED", "BLOCKED"].includes(value.activeExportRun?.status)) complete(value.activeExportRun);
+      if (stopAtSubmit && latest?.stage === "SUBMITTING") elements.get("#export-stop").listeners.click();
+      if (["COMPLETED", "BLOCKED", "STOPPED"].includes(value.activeExportRun?.status)) complete(value.activeExportRun);
     }
   } },
   scripting: { executeScript: async ({ args, files, world }) => {
@@ -78,7 +86,14 @@ context.chrome = {
     if (args[0]?.reportType) return [{ frameId: 0, result: { isReportFrame: true } }];
     if (typeof args[0] === "object") return [{ result: { isTopFrame: true, url: tab.url } }];
     if (args.length === 1) return [{ result: true }];
-    assert(!["setDateRange", "query", "submitExport"].includes(args[1]));
+    if (stopAtSubmit) {
+      if (args[1] === "setDateRange") return [{result: {status: "set"}}];
+      if (args[1] === "query") return [{result: {status: "clicked"}}];
+      if (args[1] === "queryState") return [{result: {status: "ready", count: 1,
+        ...(trade ? {merchantId: "internal-id"} : {merchantNo})}}];
+      if (args[1] === "snapshotExportTasks") return [{result: {status: "found", rows: []}}];
+    }
+    assert(!["setDateRange", "query", "submitExport"].includes(args[1]), "stop must prevent export submission");
     if (trade && args[1] === "openDownloadList") return [{result: {status: "clicked"}}];
     if (trade && args[1] === "parseDownloadTasks") {
       const now = new Date();
@@ -92,7 +107,22 @@ context.chrome = {
 vm.runInContext(fs.readFileSync(`${__dirname}/export-runner.js`, "utf8"), context);
 const timer = setTimeout(() => { console.error("FAIL: resume did not finish"); process.exitCode = 1; }, 1000);
 completed.then((state) => {
+  assert.equal(elements.get("#export-result").hidden, false);
+  assert.equal(elements.get("#export-close").disabled, false);
+  assert.equal(elements.get("#export-pause").disabled, true);
+  assert.equal(elements.get("#export-stop").disabled, true);
+  if (stopAtSubmit) {
+    assert.equal(state.status, "STOPPED", state.error);
+    assert.equal(state.stage, "用户停止");
+    assert.equal(state.months[months[0].key].status, "SUBMITTING");
+    assert.equal(downloadRuns, 0);
+    assert(!state.logs.some(message => message.startsWith("流程安全停止")));
+    assert.match(elements.get("#export-result-title").textContent, /已停止/);
+    console.log(`PASS: ${trade ? "trade" : "account"} export entry preserves user stop before submission`);
+    return;
+  }
   assert.equal(state.status, "COMPLETED", state.error);
+  assert.match(elements.get("#export-result-message").textContent, new RegExp(`${months.length} / ${months.length}`));
   assert.notEqual(state.runId, prior.runId);
   assert.equal(archived[0].runId, prior.runId);
   if (prior.status === "WAITING_GENERATION") assert.deepEqual(closedTabs, [8]);

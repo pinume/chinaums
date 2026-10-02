@@ -12,7 +12,8 @@ const merchant = 'MERCHANT1';
 const months = [1, 2].map(n => ({key: `2026-0${n}`, start: `2026-0${n}-01`, end: `2026-0${n}-28`}));
 async function check(mode, trade = false) {
   const tasks = [{id: 'old', fileName: 'old.xlsx'}];
-  let submits = 0, accepted = 0, throttles = 0, current, delayed = false;
+  let submits = 0, accepted = 0, current, delayed = false;
+  const throttles = new Map();
   const events = [];
   const result = context.CHINAUMS_MONTHLY_RUNNER.run({months, gate: {},
     checkpoint: async () => {}, sleep: async ms => {now += ms;},
@@ -33,7 +34,13 @@ async function check(mode, trade = false) {
         return {status:'clicked'};
       }
       if(operation === 'classifySubmit') {
-        if(mode === 'throttle' && throttles++ < 3) return {status:'throttled'};
+        if(mode === 'throttle') {
+          const attempts = throttles.get(current) || 0;
+          if(attempts < (current === months[0].key ? 4 : 1)) {
+            throttles.set(current,attempts+1);
+            return {status:'throttled'};
+          }
+        }
         accepted++;
         const stamp = '2026093012000' + accepted; // Both tasks fall inside the old ±2-second window.
         tasks.push({id:current,fileName:trade ? `MER_${merchant}_${stamp}_yjhx.xlsx` : `${merchant}_MX_${stamp}.xlsx`});
@@ -54,18 +61,24 @@ async function check(mode, trade = false) {
     assert.equal(rows.length,2);
     assert.equal(new Set(rows.map(r=>r.remoteFileName)).size,2);
     assert.deepEqual(Array.from(rows,r=>r.remoteTaskId),months.map(m=>m.key));
-    if(mode==='throttle') {assert.equal(submits,5);assert.equal(events.filter(e=>e.status==='WAITING_FOR_SLOT').length,3);assert(events.filter(e=>e.status==='WAITING_FOR_SLOT').every(e=>e.month==='2026-01'));assert.equal(events.filter(e=>e.status==='SETTING_DATE').length,2);}
+    if(mode==='throttle') {
+      const waits=events.filter(e=>e.status==='WAITING_FOR_SLOT');
+      assert.equal(submits,7);
+      assert.deepEqual(waits.map(e=>e.retryInMs),[30000,60000,120000,120000,30000]);
+      assert.deepEqual(waits.map(e=>e.month),['2026-01','2026-01','2026-01','2026-01','2026-02']);
+      assert.equal(events.filter(e=>e.status==='SETTING_DATE').length,2);
+    }
   }
 }
 (async()=>{
   for(const trade of [false,true]) for(const mode of ['normal','delayed','throttle','ambiguous','baseline-error']) await check(mode,trade);
   await check('switch-id',true);
-  // Numeric limits differ between server deployments; keep the same dialog semantics.
-  for(const [file, name, text] of [['account-detail.js','__chinaumsAccountDetailAdapter','您已有超过 4 条未处理或处理中的导出文件，请稍后再试'],['trade-audit.js','__chinaumsTradeAuditAdapter','超过 10 条申请在处理中']]) {
-    class Element {getClientRects(){return [1];} get innerText(){return text;}}
+  // The native account limit uses .openAlert and must remain visible beyond a long background page.
+  for(const [file, name, text] of [['account-detail.js','__chinaumsAccountDetailAdapter','您已有超过3条未处理或处理中的导出文件，请稍后再试'],['trade-audit.js','__chinaumsTradeAuditAdapter','超过 10 条申请在处理中']]) {
+    class Element {constructor(value=text){this.value=value;} getClientRects(){return [1];} get innerText(){return this.value;}}
     const dialog = new Element();
     const c=vm.createContext({Element,location:{hostname:'service.chinaums.com',pathname:file.startsWith('trade')?'/uisportalfront/':'/uisportal/accountCheckDetailQry/toDetail',hash:'#/auditOfTrade2026'},
-      getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}), document:{body:dialog,querySelectorAll:()=>[dialog]}});
+      getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}), document:{body:file.startsWith('account')?new Element('background '.repeat(500)):dialog,querySelectorAll:selector=>file.startsWith('account')?(selector.includes('.openAlert')?[dialog]:[]):[dialog]}});
     vm.runInContext(fs.readFileSync(`${__dirname}/${file}`,'utf8'),c);
     assert.equal((await c[name]('classifySubmit')).status,'throttled');
   }

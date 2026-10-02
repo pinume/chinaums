@@ -173,11 +173,24 @@
     return [...new Set(rows.map((row) => normalize(row.mchntId)))];
   };
 
+  const downloadDialogComponent = (dialog) => {
+    const instance = dialog.closest(".el-dialog__wrapper")?.__vue__;
+    return [instance, instance?.$parent].find((component) => component?.$options?.name === "ElDialog");
+  };
+  const downloadDialogs = () => [...document.querySelectorAll(".el-dialog")]
+    .filter((dialog) => normalize(textOf(dialog.querySelector(".el-dialog__title"))) === "下载暂存列表")
+    .filter((dialog) => {
+      const component = downloadDialogComponent(dialog);
+      // 后台标签页的离场动画可能延迟；组件已关闭时，残留布局不代表列表仍打开。
+      return typeof component?.visible === "boolean" ? component.visible : visible(dialog);
+    });
+
   const parseDownloadTaskList = () => {
-    if (queryBusy()) return { status: "loading" };
-    const dialogs = [...document.querySelectorAll(".el-dialog")].filter(visible);
-    const dialog = dialogs.find((element) => normalize(textOf(element.querySelector(".el-dialog__title"))) === "下载暂存列表");
+    const dialogs = downloadDialogs();
+    const dialog = dialogs[0];
     if (!dialog) return { status: "not_open" };
+    if (dialogs.length !== 1) return { status: "parse_error", rows: [] };
+    if (queryBusy() || !visible(dialog)) return { status: "loading" };
     const totalMatch = textOf(dialog).match(/共\s*(\d+)\s*条(?:记录)?/);
     const activePage = dialog.querySelector(".el-pagination .number.active");
     const table = downloadTable(dialog);
@@ -282,7 +295,6 @@
         }
         queryTracker = {
           dateValue: date.input.value,
-          startedAt: Date.now(),
           baseline: querySignature(),
           observedLoading: false,
           candidate: null,
@@ -302,8 +314,7 @@
           return { status: "waiting" };
         }
         const signature = querySignature();
-        if (!queryTracker.observedLoading && signature === queryTracker.baseline &&
-          !(args.refreshDownloadList === true && Date.now() - queryTracker.startedAt >= 3000)) {
+        if (!queryTracker.observedLoading && signature === queryTracker.baseline) {
           return { status: "waiting" };
         }
         if (queryTracker.candidate !== signature) {
@@ -324,7 +335,6 @@
           return { status: "no_data", count: count ?? 0 };
         }
         if (count !== null && currentResult.rows.length > 0 && exportButton && listButton) {
-          if (args.refreshDownloadList === true) return { status: "ready", count };
           const merchants = queryMerchantIds();
           if (merchants.length !== 1 || (args.targetMerchantId && merchants[0] !== args.targetMerchantId)) {
             return { status: "failed", reason: "查询结果没有唯一商户身份或与本轮商户不一致；未申请导出。" };
@@ -376,7 +386,11 @@
         return { status: "closed" };
       }
       case "openDownloadList": {
-        if (parseDownloadTaskList().status !== "not_open") return { status: "already_open" };
+        const dialogs = downloadDialogs();
+        if (dialogs.length > 1) return { status: "blocked", reason: "下载暂存列表弹窗不唯一。" };
+        if (dialogs.length === 1) {
+          return { status: "already_open" };
+        }
         const button = exactButton("下载暂存列表");
         if (!button) return { status: "controls_missing" };
         button.click();
@@ -408,20 +422,22 @@
       case "parseDownloadTasks":
         return parseDownloadTaskList();
       case "closeDownloadList": {
-        const dialogs = [...document.querySelectorAll(".el-dialog")]
-          .filter(visible)
-          .filter((element) => normalize(textOf(element.querySelector(".el-dialog__title"))) === "下载暂存列表");
+        const dialogs = downloadDialogs();
         if (dialogs.length === 0) return { status: "already_closed" };
         if (dialogs.length !== 1) return { status: "blocked", reason: "下载暂存列表弹窗不唯一，未关闭。" };
         const close = [...dialogs[0].querySelectorAll(".el-dialog__headerbtn")].filter(visible);
         if (close.length !== 1) return { status: "blocked", reason: "下载暂存列表右上角关闭控件缺失或不唯一。" };
         close[0].click();
+        const component = downloadDialogComponent(dialogs[0]);
+        if (component) {
+          await component.$nextTick();
+          if (component.visible !== false) return { status: "blocked", reason: "点击关闭后，下载暂存列表组件仍保持打开。" };
+        }
         return { status: "closed" };
       }
       case "nextDownloadPage": {
-        const dialog = [...document.querySelectorAll(".el-dialog")]
-          .filter(visible)
-          .find((element) => normalize(textOf(element.querySelector(".el-dialog__title"))) === "下载暂存列表");
+        const dialogs = downloadDialogs();
+        const dialog = dialogs.length === 1 ? dialogs[0] : null;
         if (!dialog) return { status: "not_open" };
         const next = [...dialog.querySelectorAll(".el-pagination .btn-next")]
           .filter(visible)
@@ -431,9 +447,8 @@
         return { status: "clicked" };
       }
       case "selectDownloadPage": {
-        const dialog = [...document.querySelectorAll(".el-dialog")]
-          .filter(visible)
-          .find((element) => normalize(textOf(element.querySelector(".el-dialog__title"))) === "下载暂存列表");
+        const dialogs = downloadDialogs();
+        const dialog = dialogs.length === 1 ? dialogs[0] : null;
         if (!dialog) return { status: "not_open" };
         const current = parseDownloadTaskList();
         if (Number(current.page) === Number(args.page)) return { status: "already_current" };
@@ -453,9 +468,8 @@
         if (!expectedFile.test(args.fileName || "")) {
           return { status: "blocked", reason: "文件名中的商户号与当前目标不符。" };
         }
-        const dialog = [...document.querySelectorAll(".el-dialog")]
-          .filter(visible)
-          .find((element) => normalize(textOf(element.querySelector(".el-dialog__title"))) === "下载暂存列表");
+        const dialogs = downloadDialogs();
+        const dialog = dialogs.length === 1 ? dialogs[0] : null;
         if (!dialog) return { status: "not_open" };
         const table = downloadTable(dialog);
         if (!table) return { status: "parse_error", reason: "下载表头无法确认。" };

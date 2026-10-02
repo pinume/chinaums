@@ -16,13 +16,48 @@ const elements = {
   resume: document.querySelector("#export-resume"),
   stop: document.querySelector("#export-stop"),
   close: document.querySelector("#export-close"),
-  error: document.querySelector("#export-error"),
+  result: document.querySelector("#export-result"),
+  resultTitle: document.querySelector("#export-result-title"),
+  resultMessage: document.querySelector("#export-result-message"),
   log: document.querySelector("#export-log")
 };
 
 let state = null;
 let paused = false;
 let stopRequested = false;
+let lastResultStatus = null;
+
+const statusLabels = {
+  GATING: "检查登录会话", RUNNING: "运行中", PAUSED: "已暂停",
+  WAITING_FOR_SLOT: "等待申请额度", WAITING_GENERATION: "等待文件生成",
+  ALL_MONTHS_SUBMITTED: "所有月份申请完成", DOWNLOADING: "下载中",
+  DOWNLOAD_REQUESTS_SENT: "所有文件下载完成", COMPLETED: "已完成",
+  BLOCKED: "导出失败，流程已停止", STOPPED: "用户停止"
+};
+
+const renderResult = (status, error = "", submitted = 0, downloaded = 0) => {
+  const terminal = ["COMPLETED", "BLOCKED", "STOPPED"].includes(status);
+  elements.result.hidden = !terminal;
+  if (!terminal) {
+    document.title = "报表导出 | 银联商务助手";
+    lastResultStatus = null;
+    return;
+  }
+  const success = status === "COMPLETED";
+  const stopped = status === "STOPPED";
+  const title = success ? (submitted ? "✓ 导出完成" : "✓ 流程完成，本轮无数据")
+    : stopped ? "■ 已停止" : "✕ 导出失败，流程已停止";
+  elements.result.className = `export-result export-result-${success ? "success" : stopped ? "stopped" : "failure"}`;
+  elements.result.setAttribute("role", status === "BLOCKED" ? "alert" : "status");
+  elements.resultTitle.textContent = title;
+  elements.resultMessage.textContent = success
+    ? (submitted ? `Chrome 已确认 ${downloaded} / ${submitted} 个文件下载完成。请在 Chrome 下载记录中查看文件。`
+      : "本轮查询均无数据，没有提交导出申请，也没有需要下载的文件。")
+    : `${error}\n已确认下载完成 ${downloaded} / ${submitted} 个已提交文件。服务器已接受的任务仍会保留，请核对暂存列表和 Chrome 下载记录。`;
+  document.title = `${title} | 银联商务助手`;
+  if (lastResultStatus !== status) elements.result.scrollIntoView({ block: "start" });
+  lastResultStatus = status;
+};
 
 const sleep = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 const withTimeout = (promise, milliseconds, operation) => {
@@ -86,7 +121,7 @@ const saveState = async () => {
 
 const renderState = () => {
   if (!state) return;
-  elements.status.textContent = state.status || "运行中";
+  elements.status.textContent = statusLabels[state.status] || "运行中";
   elements.stage.textContent = state.stage || state.status || "—";
   elements.month.textContent = state.currentMonth || "—";
   const completed = Object.values(state.months || {}).filter((item) => ["SUBMITTED", "NO_DATA"].includes(item.status)).length;
@@ -105,6 +140,7 @@ const renderState = () => {
   elements.gate.textContent = state.businessGate?.allowed ? (reportType === "trade-audit" ? "✓ 本轮任务匹配" : "✓ 查询结果匹配") : "待查询后核对";
   elements.gate.className = state.businessGate?.allowed ? "status-positive" : "";
   updateButtons();
+  renderResult(state.status, state.error, submitted, downloadRequested);
 };
 
 const transition = async (event) => {
@@ -132,15 +168,19 @@ const transition = async (event) => {
     QUERYING: `${month}：查询已触发，等待结果。`,
     QUERY_READY: `${month}：查询结果已更新并稳定。`,
     SUBMITTING: `${month}：查询完成，正在申请 XLSX。`,
-    WAITING_FOR_SLOT: `${month}：服务器限流，30 秒后重试当前月。`,
+    WAITING_FOR_SLOT: `${month}：服务器限流（第 ${event.attempt} 次），${Math.ceil(event.retryInMs / 1000)} 秒后重试当前月。`,
     NO_DATA: `${month}：明确返回无数据，跳过空文件。`,
     SUBMITTED: `${month}：申请已被服务器接受。`,
-    WAITING_GENERATION: `已识别本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已生成且可下载；列表状态 ${event.listStatus || "unknown"}，当前页读到 ${event.parsedRows ?? 0} 行；过滤：文件名或商户号 ${event.rejected?.fileName ?? 0}，时间格式 ${event.rejected?.createdAt ?? 0}，早于本轮 ${event.rejected?.beforeRun ?? 0}。稍后重开列表更新状态。`,
+    WAITING_GENERATION: `已识别本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已生成且尚未下载；列表状态 ${event.listStatus || "unknown"}，当前页读到 ${event.parsedRows ?? 0} 行；过滤：文件名或商户号 ${event.rejected?.fileName ?? 0}，时间格式 ${event.rejected?.createdAt ?? 0}，非本轮任务 ${event.rejected?.beforeRun ?? 0}。稍后重开列表更新状态。`,
     DOWNLOAD_REQUESTED: `${month || "本轮任务"}：已通过行内检查并触发下载。`,
-    DOWNLOAD_COMPLETED: `${month || "本轮任务"}：Chrome 已确认文件下载完成，5 秒后继续。`,
+    DOWNLOAD_COMPLETED: `${month || "本轮任务"}：Chrome 已确认文件下载完成，立即继续下载已生成文件。`,
     DOWNLOAD_REQUESTS_SENT: "本轮所有文件均已由 Chrome 确认下载完成。"
   };
   if (messages[status]) appendLog(messages[status]);
+  if (status === "WAITING_GENERATION") {
+    const seconds = Math.floor((event.waitedMs || 0) / 1000);
+    state.stage = `等待服务器生成：已等待 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒，剩余 ${event.remaining ?? event.expected ?? 0} 个文件未下载；约每 10 秒检查一次，可暂停或停止。`;
+  }
   renderState();
   await saveState();
 };
@@ -517,7 +557,6 @@ const run = async () => {
   }
   state.status = "COMPLETED";
   state.stage = submittedMonths.length ? "本轮文件已完成下载" : "本轮没有需要下载的文件";
-  elements.status.textContent = state.stage;
   appendLog(submittedMonths.length
     ? "导出流程结束。Chrome 已确认本轮所有文件下载完成，并关闭暂存列表。"
     : "导出流程结束。本轮月份均无数据，没有提交导出申请。");
@@ -559,14 +598,13 @@ run().catch(async (error) => {
     state.status = stopped ? "STOPPED" : "BLOCKED";
     state.stage = stopped ? "用户停止" : "安全停止";
     state.error = stopped ? "用户停止了当前自动流程。已提交给服务器的任务不会撤销。" : error?.message || "运行失败。";
-    elements.error.textContent = state.error;
     appendLog(stopped ? "流程已停止；服务器已接受的申请保留在远端。" : `流程安全停止：${state.error}`);
     renderState();
     await saveState();
   } else {
     elements.status.textContent = "无法启动";
     elements.stage.textContent = "参数/登录检查";
-    elements.error.textContent = error?.message || "导出启动失败。";
+    renderResult("BLOCKED", error?.message || "导出启动失败。");
     elements.close.disabled = false;
   }
 });
