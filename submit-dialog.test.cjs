@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-async function scenario({duplicate = false, label = '关闭', text = '申请已提交', stuck = false, synchronous = false, otherDialog = false} = {}) {
+async function scenario({duplicate = false, label = '关闭', text = '申请已提交', stuck = false, synchronous = false, otherDialog = false, initiallyClosed = false} = {}) {
   let timerCalls = 0, clicks = 0, outsideClicks = 0, disconnected = false, timerCleared = false;
   class Element {
     constructor(text = '') { this.textContent = text; this.open = true; }
@@ -10,6 +10,7 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
     querySelectorAll() { return []; }
   }
   const dialog = new Element(text);
+  if (initiallyClosed) dialog.open = false;
   const button = new Element(label);
   button.click = () => { clicks++; if (synchronous) dialog.open = false; };
   dialog.querySelectorAll = selector => selector === 'button' ? [button] : [];
@@ -31,7 +32,7 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
     MutationObserver: Observer,
     document: {documentElement: {}, querySelectorAll: selector => selector === 'button' ? [outside, button] : dialogs},
     setTimeout: (fn, delay) => {
-      assert.ok(delay > 0 && delay <= 3000);
+      assert.ok(delay > 0 && delay <= 8000);
       timerCalls++;
       if (stuck || otherDialog) Promise.resolve().then(fn);
       return 1;
@@ -45,6 +46,9 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
 }
 
 (async () => {
+  const alreadyClosed = await scenario({initiallyClosed:true});
+  assert.equal(alreadyClosed.result.status, "closed");
+  assert.equal(alreadyClosed.clicks, 0);
   const delayed = await scenario();
   assert.equal(delayed.result.status, 'closed');
   assert.equal(delayed.timerCalls, 1);
@@ -54,7 +58,7 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
   const stuck = await scenario({stuck: true});
   assert.equal(stuck.result.status, 'blocked');
   assert.equal(stuck.timerCalls, 1);
-  assert.match(stuck.result.reason, /仍未消失/);
+  assert.match(stuck.result.reason, /仍未就绪/);
   const duplicate = await scenario({duplicate: true});
   assert.equal(duplicate.result.status, 'blocked');
   assert.equal(duplicate.clicks, 0);

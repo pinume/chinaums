@@ -269,6 +269,8 @@
     if (!onReportPage()) return { status: "wrong_page", reason: "当前不是以旧换新采集2026业务 frame。" };
 
     switch (operation) {
+      case "submitDialogState":
+        return { status: dialogTexts().length === 0 ? "clear" : "visible" };
       case "inspect": {
         const date = tradeDateInput();
         return {
@@ -320,6 +322,7 @@
         return { status: "set", value: updated.input.value };
       }
       case "query": {
+        if (dialogTexts().length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不启动下一次查询。" };
         const control = exactButton("查询");
         if (!control) return { status: "controls_missing", reason: "“查询”按钮缺失或不唯一。" };
         const date = tradeDateInput();
@@ -379,6 +382,7 @@
         return { status: "waiting" };
       }
       case "submitExport": {
+        if (dialogTexts().length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不申请导出。" };
         const gate = args.gate;
         if (gate?.authentication?.status !== "logged_in" || gate.authentication.confidence !== "high") {
           return { status: "blocked", reason: "商户门禁未通过，不允许申请导出。" };
@@ -399,6 +403,7 @@
         return classifySubmit();
       case "closeSubmitDialog": {
         const result = classifySubmit();
+        if (dialogTexts().length === 0) return { status: "closed" };
         if (!["accepted", "throttled", "failed"].includes(result.status)) {
           return { status: "blocked", reason: "没有可安全关闭的已识别提交提示。" };
         }
@@ -428,12 +433,12 @@
           });
           observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
             attributeFilter: ["class", "style", "hidden"] });
-          const deadline = Math.min(Date.now() + 3000, args.operationDeadline ?? Infinity);
+          const deadline = Math.min(Date.now() + 8000, args.operationDeadline ?? Infinity);
           timer = setTimeout(() => finish(isClosed()), Math.max(0, deadline - Date.now()));
           if (isClosed()) finish(true);
         });
         if (closed) return { status: "closed" };
-        return { status: "blocked", reason: "点击关闭后，提交提示弹窗仍未消失或仍有其他弹窗打开。" };
+        return { status: "blocked", reason: `关闭等待8秒后仍未就绪（目标提示${visible(dialog) ? "仍可见" : "已隐藏"}，可见弹窗${dialogTexts().length}个）；未继续下一步。` };
       }
       case "openDownloadList": {
         const dialogs = downloadDialogs();

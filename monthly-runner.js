@@ -32,8 +32,29 @@
       return result;
     };
 
+    const waitForDialogClear = async () => {
+      if (!["account-detail", "trade-audit"].includes(reportType)) return;
+      const deadline = Date.now() + 10000;
+      let clearSince = null;
+      while (Date.now() < deadline) {
+        await checkpoint();
+        const result = await invoke("submitDialogState", {});
+        if (result?.status === "clear") {
+          clearSince ??= Date.now();
+          if (Date.now() - clearSince >= 1000) return;
+        } else if (result?.status === "visible") {
+          clearSince = null;
+        } else {
+          throw new Error("弹窗状态无法确认，未继续页面操作。");
+        }
+        await sleep(250);
+      }
+      throw new Error("弹窗未连续消失并稳定1秒，未继续下个月或申请导出；已受理任务禁止重提。");
+    };
+
     for (const month of months) {
       await checkpoint();
+      await waitForDialogClear();
       await transition({ month: month.key, status: "SETTING_DATE" });
       const setDate = await invoke("setDateRange", { start: month.start, end: month.end });
       if (setDate?.status !== "set") {
@@ -111,6 +132,7 @@
       let submitted = false;
       while (!submitted) {
         await checkpoint();
+        await waitForDialogClear();
         const baseline = await invoke("snapshotExportTasks", {});
         if (baseline?.status !== "found" || !Array.isArray(baseline.rows)) throw new Error(`${month.key} 无法读取申请前暂存任务；未申请导出。`);
         const previousIds = new Set(baseline.rows.map((row) => row.id));
@@ -161,6 +183,7 @@
           if (closed?.status !== "closed") {
             throw new Error(`${month.key} 已确认服务器接受申请；本月已记为已提交，提示框关闭失败（${closed?.reason || closed?.status || "未知状态"}）。`);
           }
+          await waitForDialogClear();
           const deadline = Date.now() + 15000;
           let task = null;
           let snapshotReason = "";

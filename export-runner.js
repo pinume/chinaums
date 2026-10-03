@@ -498,7 +498,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-03-account-refresh-slot。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-03-dialog-stable。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
@@ -513,6 +513,7 @@ const run = async () => {
   state.businessGate = { allowed: false, merchantNo: null, source: "awaiting-query-result" };
   elements.gate.textContent = "待查询后核对";
   elements.gate.className = "";
+  appendLog(`本轮报表：${reportType === "trade-audit" ? "以旧换新" : "对账明细"}。`);
   appendLog("当前会话已登录。将沿用当前商户，从今年 1 月开始逐月查询；首个有数据的月份会识别商户号。");
   if (prior?.runId) appendLog(`上次运行（${prior.runId}）已留档；本轮从 ${monthKeys[0]} 重新开始，不会漏掉月份。`);
   await saveState();
