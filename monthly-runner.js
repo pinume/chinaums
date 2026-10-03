@@ -158,15 +158,33 @@
           }
           const deadline = Date.now() + 15000;
           let task = null;
+          let snapshotReason = "";
           while (Date.now() < deadline) {
             await checkpoint();
-            const snapshot = await invoke("snapshotExportTasks", {});
-            if (snapshot?.status !== "found" || !Array.isArray(snapshot.rows)) throw new Error(`${month.key} 已提交，但无法核对新建暂存任务；禁止重提。`);
+            let snapshot;
+            try {
+              snapshot = await invoke("snapshotExportTasks", {});
+            } catch (error) {
+              if (error?.message === "STOPPED_BY_USER") throw error;
+              snapshotReason = error?.message || "暂存读取未响应";
+              await sleep(500);
+              continue;
+            }
+            if (snapshot?.status !== "found" || !Array.isArray(snapshot.rows)) {
+              snapshotReason = snapshot?.reason || snapshot?.status || "暂存读取无返回结果";
+              if (!["unknown", "loading", "empty"].includes(snapshot?.status)) {
+                throw new Error(`${month.key} 已提交，但无法核对新建暂存任务（${snapshotReason}）；禁止重提。`);
+              }
+              await sleep(500);
+              continue;
+            }
+            snapshotReason = "";
             const added = snapshot.rows.filter((row) => !previousIds.has(row.id));
             if (added.length > 1) throw new Error(`${month.key} 已提交，但出现多个新暂存任务，无法唯一确认归属；禁止重提。`);
             if (added.length === 1) { task = added[0]; break; }
             await sleep(500);
           }
+          if (!task) throw new Error(`${month.key} 已提交，但15秒内未确认新建暂存任务${snapshotReason ? `（${snapshotReason}）` : ""}；禁止重提。`);
           const match = task?.fileName?.match(activeMerchantId
             ? /^MER_([A-Z0-9]+)_\d{14}_yjhx\.xlsx$/i
             : /^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
@@ -240,3 +258,4 @@
     run
   });
 })();
+

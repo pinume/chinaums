@@ -43,6 +43,40 @@ async function run() {
     }
   });
   assert.equal(emptyEvents.filter(event => event.status === 'NO_DATA').length, months.length);
+  for (const closeFails of [false, true]) {
+    let submits = 0, snapshots = 0;
+    const events = [];
+    const invoke = async operation => {
+      if (operation === 'setDateRange') return {status:'set'};
+      if (operation === 'query') return {status:'clicked'};
+      if (operation === 'queryState') return {status:'ready',count:1,merchantNo:'89813015722APT1',merchantId:'merchant-id'};
+      if (operation === 'submitExport') { submits++; return {status:'clicked'}; }
+      if (operation === 'classifySubmit') return {status:'accepted'};
+      if (operation === 'closeSubmitDialog') return closeFails ? {status:'blocked',reason:'弹窗仍打开'} : {status:'closed'};
+      if (operation === 'snapshotExportTasks') {
+        snapshots++;
+        if (snapshots === 1) return {status:'found',rows:[]};
+        if (snapshots === 2) return {status:'loading'};
+        if (snapshots === 3) throw new Error('暂存读取短暂失败');
+        if (snapshots === 4) return {status:'found',rows:[]};
+        return {status:'found',rows:[{id:'new-task',fileName:'MER_89813015722APT1_20261003113358_yjhx.xlsx'}]};
+      }
+      throw new Error(operation);
+    };
+    const promise = context.CHINAUMS_MONTHLY_RUNNER.run({months:[months[0]],gate:{},invoke,
+      checkpoint:async()=>{},sleep:async()=>{},transition:async event=>events.push({...event})});
+    if (closeFails) {
+      await assert.rejects(promise, /提示框关闭失败/);
+      assert.equal(snapshots, 1, 'must not read tasks while submit dialog remains open');
+      assert.ok(events.some(event => event.status === 'SUBMITTED'));
+    } else {
+      const result = await promise;
+      assert.equal(result[0].remoteTaskId, 'new-task');
+      assert.equal(snapshots, 5);
+    }
+    assert.equal(submits, 1, 'accepted export must never be resubmitted');
+  }
   console.log('PASS: monthly trade export closes success notice and binds each new server task before starting the next month');
 }
 run().catch(e=>{console.error(e);process.exitCode=1;});
+

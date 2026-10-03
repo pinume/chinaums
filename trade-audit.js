@@ -370,20 +370,21 @@
           return { status: "blocked", reason: "没有可安全关闭的已识别提交提示。" };
         }
         const closeLabel = result.status === "throttled" ? "确认" : "关闭";
-        const candidates = [...document.querySelectorAll(".el-message-box button,.el-dialog button,button")]
+        const dialogs = [...document.querySelectorAll(".el-message-box,.el-dialog")]
           .filter(visible)
-          .filter((element) => normalize(textOf(element)) === closeLabel);
-        const scoped = candidates.filter((element) => {
-          let parent = element;
-          for (let depth = 0; parent && depth < 6; parent = parent.parentElement, depth += 1) {
-            if (dialogTexts().some((text) => /申请已提交|超过\s*\d+\s*条申请在处理中|申请失败|导出失败/.test(text)) &&
-              /申请已提交|超过\s*\d+\s*条申请在处理中|申请失败|导出失败/.test(textOf(parent))) return true;
-          }
-          return false;
-        });
+          .filter((dialog) => /申请已提交|超过\s*\d+\s*条申请在处理中|申请失败|导出失败|系统异常/.test(textOf(dialog)));
+        if (dialogs.length !== 1) return { status: "blocked", reason: "提交提示弹窗缺失或不唯一。" };
+        const dialog = dialogs[0];
+        const scoped = [...dialog.querySelectorAll("button")]
+          .filter(visible)
+          .filter((element) => !element.disabled && normalize(textOf(element)) === closeLabel);
         if (scoped.length !== 1) return { status: "blocked", reason: "提交提示内的确认/关闭按钮缺失或不唯一。" };
         scoped[0].click();
-        return { status: "closed" };
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          if (!visible(dialog) && dialogTexts().length === 0) return { status: "closed" };
+        }
+        return { status: "blocked", reason: "点击关闭后，提交提示弹窗仍未消失或仍有其他弹窗打开。" };
       }
       case "openDownloadList": {
         const dialogs = downloadDialogs();
@@ -498,3 +499,4 @@
     }
   };
 })();
+
