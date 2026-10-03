@@ -1,6 +1,21 @@
 (() => {
   const ROUTE = "/uisportal/accountCheckDetailQry/toDetail";
   let queryTracker = null;
+  let downloadRefresh = null;
+  const beginDownloadRefresh = () => {
+    downloadRefresh?.observer?.disconnect();
+    const tracker = { startedAt: performance.now(), candidate: null, candidateSince: 0, completed: null };
+    tracker.capture = (entries) => {
+      const completed = entries.filter((entry) => entry.name.includes("/accountCheckDetailQry/selectDeailBillList") &&
+        entry.startTime >= tracker.startedAt && entry.responseEnd >= entry.startTime).at(-1);
+      if (completed) tracker.completed = completed;
+    };
+    if (typeof PerformanceObserver === "function") {
+      tracker.observer = new PerformanceObserver((list) => tracker.capture(list.getEntries()));
+      tracker.observer.observe({ entryTypes: ["resource"] });
+    }
+    downloadRefresh = tracker;
+  };
   const clean = (value, limit = 240) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
   const normalize = (value) => clean(value, 500).replace(/\s/g, "");
   const visible = (element) => {
@@ -130,6 +145,24 @@
       return { status: "not_found", rows: [] };
     }
     const dialog = dialogs[0];
+    if (downloadRefresh) {
+      downloadRefresh.capture(downloadRefresh.observer?.takeRecords() || []);
+      downloadRefresh.capture(performance.getEntriesByType("resource"));
+      const completed = downloadRefresh.completed;
+      if (!completed) return { status: "loading" };
+      if (completed.responseStatus !== undefined && (completed.responseStatus === 0 || completed.responseStatus >= 400)) {
+        return { status: "refresh_error", reason: "暂存列表刷新请求失败。" };
+      }
+      const signature = textOf(dialog);
+      if (signature !== downloadRefresh.candidate) {
+        downloadRefresh.candidate = signature;
+        downloadRefresh.candidateSince = Date.now();
+        return { status: "loading" };
+      }
+      if (Date.now() - downloadRefresh.candidateSince < 500) return { status: "loading" };
+      downloadRefresh.observer?.disconnect();
+      downloadRefresh = null;
+    }
     const visibleText = textOf(dialog);
     const rows = [...dialog.querySelectorAll("table tr")]
       .filter(visible)
@@ -383,6 +416,7 @@
           matches = [...document.querySelectorAll("button#download")].filter(visible);
           if (matches.length > 1) return { status: "blocked", reason: "可见的下载暂存列表入口不唯一。" };
           if (matches.length === 1 && !matches[0].disabled) {
+            beginDownloadRefresh();
             matches[0].click();
             return { status: "clicked" };
           }
@@ -433,13 +467,14 @@
         const option = [...select.options].find((item) => !item.disabled && item.text.trim() === "20");
         if (!option) return { status: "unavailable" };
         if (select.value === option.value) return { status: "unchanged" };
+        beginDownloadRefresh();
         select.value = option.value;
         select.dispatchEvent(new Event("change", { bubbles: true }));
         return { status: "set", size: 20 };
       }
       case "closeDownloadList": {
         const dialogMatches = downloadDialogs();
-        if (dialogMatches.length === 0) return { status: "already_closed" };
+        if (dialogMatches.length === 0) { downloadRefresh?.observer?.disconnect(); downloadRefresh = null; return { status: "already_closed" }; }
         if (dialogMatches.length !== 1) return { status: "blocked", reason: "下载暂存列表弹窗不唯一，未关闭。" };
         const dialog = dialogMatches[0];
         const candidates = [...new Set([
@@ -448,6 +483,8 @@
         ])].filter(visible);
         if (candidates.length !== 1) return { status: "blocked", reason: "下载暂存列表右上角关闭控件缺失或不唯一。" };
         candidates[0].click();
+        downloadRefresh?.observer?.disconnect();
+        downloadRefresh = null;
         return { status: "closed" };
       }
       case "nextDownloadPage": {
@@ -461,6 +498,7 @@
           if (nativeNext) next.push(nativeNext);
         }
         if (next.length !== 1) return { status: "end" };
+        beginDownloadRefresh();
         next[0].click();
         return { status: "clicked" };
       }
@@ -472,14 +510,20 @@
         const matches = [...dialogs[0].querySelectorAll(".el-pagination .number,.layui-laypage a,[aria-label]")]
           .filter(visible)
           .filter((element) => clean(element.innerText || element.textContent || element.getAttribute("aria-label"), 20) === String(args.page));
-        if (matches.length === 1) { matches[0].click(); return { status: "clicked" }; }
+        if (matches.length === 1) { beginDownloadRefresh(); matches[0].click(); return { status: "clicked" }; }
         const deadline = Date.now() + 10000;
         while (Date.now() < deadline) {
-          const page = scanDownloadTasks().page;
+          const current = scanDownloadTasks();
+          if (!["found", "empty"].includes(current.status)) {
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            continue;
+          }
+          const page = current.page;
           if (page === args.page) return { status: "clicked" };
           const label = args.page === 1 ? "首页" : page < args.page ? "下一页" : "上一页";
           const control = downloadPageControl(dialogs[0], label);
           if (!control) return { status: "unavailable" };
+          beginDownloadRefresh();
           control.click();
           while (Date.now() < deadline && scanDownloadTasks().page === page) {
             await new Promise((resolve) => setTimeout(resolve, 200));
@@ -488,6 +532,7 @@
         return { status: "unavailable" };
       }
       case "downloadTask": {
+        if (downloadRefresh && scanDownloadTasks().status !== "found") return { status: "not_ready", reason: "暂存列表刷新尚未完成。" };
         if (!downloadGateAllowed(args)) return { status: "blocked", reason: "商户门禁未通过，不允许下载。" };
         if (!new RegExp(`^${args.targetMerchantNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}_MX_\\d{14}(?:_[^.]*)?\\.xlsx$`, "i").test(args.fileName || "")) {
           return { status: "blocked", reason: "文件名中的商户号与当前目标不符。" };

@@ -66,8 +66,10 @@ const wrapper = new Element();
 dialog.parentElement = wrapper;
 const launch = new Element("下载暂存列表", undefined, () => { opened = true; opens += 1; size = 5; page = 1; });
 launch.getClientRects = () => buttonDelay-- > 0 ? [] : [1];
+let resourceEntries = [{ name: "/uisportal/accountCheckDetailQry/selectDeailBillList", startTime: 1, responseEnd: 2, responseStatus: 200 }];
 const context = vm.createContext({
   Element, Event, Date, setTimeout,
+  performance: { now: () => 0, getEntriesByType: () => resourceEntries },
   getComputedStyle: (element) => ({ display: "block", visibility: "visible", opacity: element === wrapper && !opened ? "0" : "1" }),
   location: { hostname: "service.chinaums.com", pathname: "/uisportal/accountCheckDetailQry/toDetail" },
   document: {
@@ -83,10 +85,23 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
 }
 
 (async () => {
-  const invoke = context.__chinaumsAccountDetailAdapter;
+  const adapter = context.__chinaumsAccountDetailAdapter;
+  const invoke = async (operation, args) => {
+    const result = await adapter(operation, args);
+    if (operation !== "parseDownloadTasks" || result.status !== "loading") return result;
+    await new Promise((resolve) => setTimeout(resolve, 510));
+    return adapter(operation, args);
+  };
+  resourceEntries[0].startTime = -1;
   await invoke("openDownloadList");
+  assert.equal((await adapter("parseDownloadTasks")).status, "loading", "old request cannot validate retained rows");
+  resourceEntries[0].startTime = 1;
+  assert.equal((await adapter("parseDownloadTasks")).status, "loading", "fresh response still waits for stable content");
   assert.equal((await invoke("parseDownloadTasks")).hasNext, true);
   await invoke("nextDownloadPage");
+  resourceEntries[0].responseStatus = 503;
+  assert.equal((await adapter("parseDownloadTasks")).status, "refresh_error");
+  resourceEntries[0].responseStatus = 200;
   assert.equal((await invoke("parseDownloadTasks")).page, 2);
   await invoke("selectDownloadPage", { page: 1 });
   assert.equal(page, 1);
@@ -111,3 +126,4 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
   assert.equal(page, 1, "no need to scan historical pages once all current tasks are found");
   console.log("PASS: native page size 20, navigation, ready-first downloads, refresh, no duplicates and final close");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
+

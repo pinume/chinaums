@@ -168,7 +168,9 @@ const transition = async (event) => {
     QUERYING: `${month}：查询已触发，等待结果。`,
     QUERY_READY: `${month}：查询结果已更新并稳定。`,
     SUBMITTING: `${month}：查询完成，正在申请 XLSX。`,
-    WAITING_FOR_SLOT: `${month}：服务器限流（第 ${event.attempt} 次），${Math.ceil(event.retryInMs / 1000)} 秒后重试当前月。`,
+    WAITING_FOR_SLOT: event.pending === undefined
+      ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒，检查生成状态后重试当前月。`
+      : `${month}：等待申请名额，本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成。`,
     NO_DATA: `${month}：明确返回无数据，跳过空文件。`,
     SUBMITTED: `${month}：申请已被服务器接受。`,
     WAITING_GENERATION: `已识别本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已生成且尚未下载；列表状态 ${event.listStatus || "unknown"}，当前页读到 ${event.parsedRows ?? 0} 行；过滤：文件名或商户号 ${event.rejected?.fileName ?? 0}，时间格式 ${event.rejected?.createdAt ?? 0}，非本轮任务 ${event.rejected?.beforeRun ?? 0}。稍后重开列表更新状态。`,
@@ -496,7 +498,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-03-refresh-wait。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-03-account-refresh-slot。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
@@ -525,6 +527,7 @@ const run = async () => {
   if (months.length) {
     await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
       months,
+      reportType,
       invoke: (operation, args) => invoke(reportType, operation, args),
       gate,
       checkpoint,
