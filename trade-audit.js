@@ -380,10 +380,26 @@
           .filter((element) => !element.disabled && normalize(textOf(element)) === closeLabel);
         if (scoped.length !== 1) return { status: "blocked", reason: "提交提示内的确认/关闭按钮缺失或不唯一。" };
         scoped[0].click();
-        for (let attempt = 0; attempt < 30; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          if (!visible(dialog) && dialogTexts().length === 0) return { status: "closed" };
-        }
+        const isClosed = () => !visible(dialog) && dialogTexts().length === 0;
+        // 后台页面的连续短计时器会被节流；由 DOM 变化直接确认关闭。
+        const closed = await new Promise((resolve) => {
+          if (isClosed()) return resolve(true);
+          let timer;
+          const finish = (value) => {
+            observer.disconnect();
+            clearTimeout(timer);
+            resolve(value);
+          };
+          const observer = new MutationObserver(() => {
+            if (isClosed()) finish(true);
+          });
+          observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
+            attributeFilter: ["class", "style", "hidden"] });
+          const deadline = Math.min(Date.now() + 3000, args.operationDeadline ?? Infinity);
+          timer = setTimeout(() => finish(isClosed()), Math.max(0, deadline - Date.now()));
+          if (isClosed()) finish(true);
+        });
+        if (closed) return { status: "closed" };
         return { status: "blocked", reason: "点击关闭后，提交提示弹窗仍未消失或仍有其他弹窗打开。" };
       }
       case "openDownloadList": {

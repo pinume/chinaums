@@ -149,7 +149,12 @@
           submitted = true;
           let closed = { status: "unknown" };
           for (let closeAttempt = 0; closeAttempt < 3; closeAttempt += 1) {
-            closed = await invoke("closeSubmitDialog", {});
+            try {
+              closed = await invoke("closeSubmitDialog", {});
+            } catch (error) {
+              if (error?.message === "STOPPED_BY_USER") throw error;
+              throw new Error(`${month.key} 已确认服务器接受申请；本月已记为已提交，关闭提示操作未完成（${error?.message || "页面未响应"}）；禁止重提。`);
+            }
             if (closed?.status === "closed") break;
             await sleep(350);
           }
