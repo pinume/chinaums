@@ -59,6 +59,8 @@
     let consecutiveParseErrors = 0;
     let lastList = null;
     let rejected = {};
+    let cachedTotal = null;
+    const taskPages = new Map();
     const parseTasks = async () => {
       const list = await invoke("parseDownloadTasks", {});
       lastList = list;
@@ -73,15 +75,17 @@
       return list;
     };
 
-    const waitForDownloadList = async () => {
+    const waitForDownloadList = async (required = true) => {
       const deadline = Date.now() + 15000;
       while (Date.now() < deadline) {
         await checkpoint();
         const list = await parseTasks();
-        if (["found", "empty"].includes(list?.status)) return;
+        if (["found", "empty"].includes(list?.status)) return true;
+        if (list?.status === "refresh_error") break;
         await sleep(200);
       }
-      throw new Error(`暂存列表打开后未能读取（${lastList?.status || "unknown"}）；本轮已提交任务保留在远端。`);
+      if (required) throw new Error(`暂存列表打开后未能读取（${lastList?.status || "unknown"}）；本轮已提交任务保留在远端。`);
+      return false;
     };
     await waitForDownloadList();
 
@@ -96,21 +100,28 @@
         return null;
       }
       let currentPage = Number(list.page) || 1;
-      if (currentPage !== 1) {
+      const pendingFiles = [...requestedFiles].filter((file) => !downloaded.has(file));
+      const hintedPages = cachedTotal !== null && Number(list.total) === cachedTotal &&
+        pendingFiles.every((file) => taskPages.has(file))
+        ? [...new Set(pendingFiles.map((file) => taskPages.get(file)))].sort((a, b) => a - b) : null;
+      const firstPage = hintedPages?.[0] ?? 1;
+      if (currentPage !== firstPage) {
         const oldRows = JSON.stringify((list.rows || []).map((row) => row.fileName));
-        const selected = await invoke("selectDownloadPage", { page: 1 });
+        const selected = await invoke("selectDownloadPage", { page: firstPage });
         if (selected?.status !== "clicked" && selected?.status !== "already_current") {
+          if (hintedPages) { cachedTotal = null; return scanCurrentRunTasks(); }
           return null;
         }
         const deadline = Date.now() + 15000;
         while (true) {
           await checkpoint();
           list = await parseTasks();
-          if (["found", "empty"].includes(list?.status) && Number(list.page) === 1 && JSON.stringify((list.rows || []).map((row) => row.fileName)) !== oldRows) break;
+          if (["found", "empty"].includes(list?.status) && Number(list.page) === firstPage && JSON.stringify((list.rows || []).map((row) => row.fileName)) !== oldRows) break;
           if (Date.now() >= deadline) break;
           await sleep(200);
         }
-        if (Number(list?.page) !== 1 || JSON.stringify((list.rows || []).map((row) => row.fileName)) === oldRows) {
+        if (Number(list?.page) !== firstPage || JSON.stringify((list.rows || []).map((row) => row.fileName)) === oldRows) {
+          if (hintedPages) { cachedTotal = null; return scanCurrentRunTasks(); }
           return null;
         }
       }
@@ -138,13 +149,16 @@
         }
 
         if (duplicateCandidates.size) throw new Error("暂存列表中同名任务出现多次，无法唯一确认文件行；已暂停下载。");
-        if (list.hasNext === false) { complete = true; break; }
+        if (hintedPages && pageAttempt + 1 >= hintedPages.length) { complete = true; break; }
+        if (!hintedPages && list.hasNext === false) { complete = true; break; }
         if (list.hasNext !== true) return null;
 
         const oldPage = currentPage;
         const oldRows = JSON.stringify((list.rows || []).map((row) => row.fileName));
-        const next = await invoke("nextDownloadPage", {});
+        const targetPage = hintedPages?.[pageAttempt + 1];
+        const next = await invoke(targetPage ? "selectDownloadPage" : "nextDownloadPage", targetPage ? { page: targetPage } : {});
         if (next?.status !== "clicked") {
+          if (hintedPages) { cachedTotal = null; return scanCurrentRunTasks(); }
           return null;
         }
         const deadline = Date.now() + 15000;
@@ -157,10 +171,17 @@
           await sleep(200);
         }
         if (!arrived) {
+          if (hintedPages) { cachedTotal = null; return scanCurrentRunTasks(); }
           return null;
         }
       }
       if (!complete) return null;
+      if (hintedPages && pendingFiles.some((file) => !collected.has(file))) {
+        cachedTotal = null;
+        return scanCurrentRunTasks();
+      }
+      cachedTotal = list.total === null || list.total === undefined ? null : Number(list.total);
+      for (const task of collected.values()) taskPages.set(task.fileName, task.page);
       const associated = [...collected.values()];
       return associated.sort((left, right) =>
         left.fileTimestamp - right.fileTimestamp || left.createdTimestamp - right.createdTimestamp
@@ -173,13 +194,23 @@
     let associatedTasks = [];
     let tasks = [];
     let generationWaitStartedAt = null;
+    let scanFailures = 0;
+    const associatedByFile = new Map();
     while (true) {
       await checkpoint();
-      const scanned = await scanCurrentRunTasks();
+      let scanned = null;
+      try {
+        scanned = await scanCurrentRunTasks();
+      } catch (error) {
+        if (error?.message === "STOPPED_BY_USER" || /同名任务|列表结构/.test(error?.message || "")) throw error;
+        lastList = { status: "refresh_error", reason: error?.message || "列表读取失败" };
+      }
+      scanFailures = scanned === null ? scanFailures + 1 : 0;
+      if (scanFailures >= 3) throw new Error(`暂存列表连续 3 次刷新读取失败（${lastList?.reason || lastList?.status || "unknown"}）；已提交任务保留，禁止重提。`);
       tasks = scanned || [];
       const failedTask = tasks.find((task) => !downloaded.has(task.fileName) && task.statusCode === "failed");
       if (failedTask) throw new Error(`文件 ${failedTask.fileName} 生成失败（${failedTask.status}）；停止等待，请核对服务器暂存任务。`);
-      if (tasks.length === expectedCount) {
+      if (tasks.length > 0) {
         if (reportType === "trade-audit" && !merchantNo) {
           const merchants = [...new Set(tasks.map((task) => task.fileName.match(/^MER_([A-Z0-9]+)_/i)?.[1]?.toUpperCase()))];
           if (merchants.length !== 1 || !merchants[0]) throw new Error("本轮暂存任务包含多个商户或商户号无法确认，停止下载。");
@@ -188,11 +219,12 @@
           gate.merchantNo = merchantNo;
           if (onMerchantIdentified) await onMerchantIdentified(merchantNo);
         }
-        associatedTasks = tasks.map((task, index) => ({
+        for (const task of tasks) associatedByFile.set(task.fileName, {
           ...task,
           month: task.month || orderedMonths.find((month) => month.remoteFileName === task.fileName)?.month || null,
-          submitOrder: index + 1
-        }));
+          submitOrder: orderedMonths.findIndex((month) => month.remoteFileName === task.fileName) + 1
+        });
+        associatedTasks = [...associatedByFile.values()].sort((a, b) => a.submitOrder - b.submitOrder);
 
         for (const task of associatedTasks) {
           if (downloaded.has(task.fileName) || task.statusCode !== "ready" || task.downloadEnabled !== true) continue;
@@ -232,7 +264,7 @@
       }
       const readyCount = tasks.filter((task) => !downloaded.has(task.fileName) && task.statusCode === "ready" && task.downloadEnabled === true).length;
       generationWaitStartedAt ??= Date.now();
-      await transition({ status: "WAITING_GENERATION", found: tasks.length, ready: readyCount, expected: expectedCount,
+      await transition({ status: "WAITING_GENERATION", found: associatedByFile.size, ready: readyCount, expected: expectedCount,
         waitedMs: Date.now() - generationWaitStartedAt, remaining: expectedCount - downloaded.size,
         listStatus: lastList?.status || "unknown", parsedRows: lastList?.rows?.length || 0, rejected });
       for (let second = 0; second < 10; second += 1) {
@@ -269,11 +301,23 @@
         await sleep(200);
       }
       if (!listClosed) throw new Error(`暂存列表关闭结果无法确认（关闭返回 ${lastCloseStatus}，列表状态 ${lastListStatus}，尝试 ${closeAttempts} 次）；已停止自动下载。`);
-      const reopened = await invoke("openDownloadList", { gate, targetMerchantNo: merchantNo });
+      let reopened;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          reopened = await invoke("openDownloadList", { gate, targetMerchantNo: merchantNo });
+        } catch (error) {
+          if (error?.message === "STOPPED_BY_USER") throw error;
+          reopened = { status: "unknown", reason: error?.message };
+        }
+        if (reopened?.status === "clicked") break;
+        if (!["controls_missing", "unknown"].includes(reopened?.status)) break;
+        await checkpoint();
+        await sleep(500);
+      }
       if (reopened?.status !== "clicked") {
         throw new Error(`无法重新打开暂存列表以更新任务状态（${reopened?.status || "无返回状态"}）：${reopened?.reason || "页面操作未能确认"}；已停止自动下载。`);
       }
-      await waitForDownloadList();
+      await waitForDownloadList(false);
     }
 
     await transition({ status: "DOWNLOAD_REQUESTS_SENT", count: associatedTasks.length });

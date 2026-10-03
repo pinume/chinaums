@@ -12,6 +12,8 @@ class Element {
 let failed = false;
 let clicked = 0, ready = false, hidden = false, opening = 0, loading = false;
 let now = new Date(2026,8,30,18,13,40).getTime();
+let refreshAt = now;
+let resourceAvailable = true, resourceStatus = 200;
 const steps = [];
 const clock = class extends Date { static now() { return now; } };
 const fileName = 'MER_89813014812B1L3_20260930181340_yjhx.xlsx';
@@ -29,13 +31,13 @@ const dialog = new Element('共 146 条'); dialog.querySelectorAll = s => s === 
 const wrapper = new Element(); dialog.parentElement = wrapper;
 const input = new Element(); input.value = '2026/09/01 ~ 2026/09/30';
 const query = new Element('查询'); query.click = () => { throw new Error('下载状态刷新不应重新查询交易'); };
-const launch = new Element('下载暂存列表'); launch.click = () => { steps.push('open'); hidden = false; opening = 2; if(closeClicks > 1) ready = true; };
+const launch = new Element('下载暂存列表'); launch.click = () => { refreshAt = now; steps.push('open'); hidden = false; opening = 2; if(closeClicks > 1) ready = true; };
 let closeClicks = 0;
 const close = new Element('×'); close.click = () => { steps.push('close'); closeClicks++; if(closeClicks > 1) hidden = true; };
 const oldDialogQuery = dialog.querySelectorAll;
 dialog.querySelectorAll = selector => selector === '.el-dialog__headerbtn' ? [close] : oldDialogQuery(selector);
 
-const context = vm.createContext({Element, Date:clock, getComputedStyle: element => ({display:'block',visibility:'visible',opacity:element === wrapper && hidden ? '0' : '1'}), location:{hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},document:{body:new Element('根据查询条件共查询到 1 条记录'),querySelectorAll:s => {
+const context = vm.createContext({Element, Date:clock, performance:{now:()=>now,getEntriesByType:()=>resourceAvailable ? [{name:"https://service.chinaums.com/qryExportDtls",startTime:refreshAt,responseEnd:refreshAt+1,responseStatus:resourceStatus}] : []}, getComputedStyle: element => ({display:'block',visibility:'visible',opacity:element === wrapper && hidden ? '0' : '1'}), location:{hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},document:{body:new Element('根据查询条件共查询到 1 条记录'),querySelectorAll:s => {
   if (s === '.el-dialog') { if (opening > 0) { opening--; return []; } return [dialog]; }
   if (s === 'input.deal-date') return [input];
   if (s === 'button') return [query, launch, new Element('批量导出')];
@@ -105,6 +107,7 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   const originalLaunch = launch.click;
   launch.click = () => {component.visible = true; originalLaunch(); opening = 0;};
   assert.equal((await adapter('openDownloadList')).status,'clicked', 'closed component must be reopened despite residual visible DOM');
+  await adapter('parseDownloadTasks'); now+=500;
   assert.equal((await adapter('parseDownloadTasks')).status,'found');
   const originalClose = close.click;
   close.click = () => {component.visible = false; originalClose(); hidden = false;};
@@ -115,6 +118,33 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   assert.equal((await adapter('closeDownloadList')).status,'blocked', 'an ignored close click must never claim closure');
   component.visible = false; wrapper.__vue__ = component;
   assert.equal((await adapter('parseDownloadTasks')).status,'not_open', 'the wrapper may point directly to ElDialog after transition');
+  resourceAvailable = false;
+  assert.equal((await adapter('openDownloadList')).status,'clicked');
+  assert.equal((await adapter('parseDownloadTasks')).status,'loading','old rows cannot acknowledge a pending refresh');
+  assert.equal((await adapter('downloadTask',args)).status,'not_ready');
+  resourceAvailable = true;
+  refreshAt = now - 100;
+  assert.equal((await adapter('parseDownloadTasks')).status,'loading','prior request cannot acknowledge this refresh');
+  refreshAt = now;
+  assert.equal((await adapter('parseDownloadTasks')).status,'loading');
+  now += 500;
+  assert.equal((await adapter('parseDownloadTasks')).status,'found','unchanged rows are valid after request completion');
+  component.visible = false;
+  resourceStatus = 503;
+  await adapter('openDownloadList');
+  assert.equal((await adapter('parseDownloadTasks')).status,'refresh_error');
+  assert.equal((await adapter('downloadTask',args)).status,'not_ready');
+  component.visible = false; resourceAvailable = false;
+  let observerDisconnected = false;
+  context.PerformanceObserver = class {
+    observe(options) { assert.equal(options.entryTypes[0],'resource'); }
+    takeRecords() { return [{name:'https://service.chinaums.com/qryExportDtls',startTime:refreshAt,responseEnd:refreshAt+1,responseStatus:200}]; }
+    disconnect() { observerDisconnected = true; }
+  };
+  await adapter('openDownloadList');
+  await adapter('parseDownloadTasks'); now += 500;
+  assert.equal((await adapter('parseDownloadTasks')).status,'found','observer survives a full resource timing buffer');
+  assert.equal(observerDisconnected,true);
   console.log('PASS: loading-safe dialog opening, actual Element table layout, pending/disabled, successful downloads and foreign merchant rejection');
 })().catch(e => {console.error(e);process.exitCode = 1;});
 

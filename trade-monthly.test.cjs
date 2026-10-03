@@ -43,7 +43,7 @@ async function run() {
     }
   });
   assert.equal(emptyEvents.filter(event => event.status === 'NO_DATA').length, months.length);
-  for (const closeFails of [false, true]) {
+  for (const closeFails of [false, true, 'timeout', 'stopped']) {
     let submits = 0, snapshots = 0;
     const events = [];
     const invoke = async operation => {
@@ -52,7 +52,11 @@ async function run() {
       if (operation === 'queryState') return {status:'ready',count:1,merchantNo:'89813015722APT1',merchantId:'merchant-id'};
       if (operation === 'submitExport') { submits++; return {status:'clicked'}; }
       if (operation === 'classifySubmit') return {status:'accepted'};
-      if (operation === 'closeSubmitDialog') return closeFails ? {status:'blocked',reason:'弹窗仍打开'} : {status:'closed'};
+      if (operation === 'closeSubmitDialog') {
+        if (closeFails === 'timeout') throw new Error('页面操作“closeSubmitDialog”在15秒内没有响应。');
+        if (closeFails === 'stopped') throw new Error('STOPPED_BY_USER');
+        return closeFails ? {status:'blocked',reason:'弹窗仍打开'} : {status:'closed'};
+      }
       if (operation === 'snapshotExportTasks') {
         snapshots++;
         if (snapshots === 1) return {status:'found',rows:[]};
@@ -66,7 +70,8 @@ async function run() {
     const promise = context.CHINAUMS_MONTHLY_RUNNER.run({months:[months[0]],gate:{},invoke,
       checkpoint:async()=>{},sleep:async()=>{},transition:async event=>events.push({...event})});
     if (closeFails) {
-      await assert.rejects(promise, /提示框关闭失败/);
+      await assert.rejects(promise, closeFails === 'timeout' ? /2026-01.*已提交.*closeSubmitDialog.*禁止重提/ :
+        closeFails === 'stopped' ? /STOPPED_BY_USER/ : /提示框关闭失败/);
       assert.equal(snapshots, 1, 'must not read tasks while submit dialog remains open');
       assert.ok(events.some(event => event.status === 'SUBMITTED'));
     } else {
