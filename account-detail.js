@@ -90,6 +90,36 @@
       (button && (button.disabled || /查询中|加载中/.test(textOf(button))))
     );
   };
+  // Record short loading cycles and redraws even when the next poll sees identical results.
+  const observeQuery = (control) => {
+    const tracker = queryTracker;
+    if (typeof MutationObserver !== "function") return;
+    tracker.observer = new MutationObserver((records) => {
+      if (queryTracker !== tracker) return;
+      const loadingSelector = ".el-loading-mask,.layui-layer-loading,.loading";
+      if (queryBusy() || records.some((record) =>
+        (record.target instanceof Element && record.target.matches(loadingSelector)) ||
+        [...(record.addedNodes || []), ...(record.removedNodes || [])].some((node) =>
+          node instanceof Element && (node.matches(loadingSelector) || node.querySelector(loadingSelector))) ||
+        (record.target === control && record.attributeName === "disabled" && record.oldValue !== null))) {
+        tracker.observedLoading = true;
+        tracker.candidate = null;
+      }
+      if (records.some((record) => {
+        if (!["childList", "characterData"].includes(record.type)) return false;
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        const result = target?.closest("table");
+        return result && !result.closest("#downloadList,.loadSave-row") &&
+          [...result.querySelectorAll("th,td")].some((cell) => /^(商户号|商户编号)$/.test(normalize(textOf(cell))));
+      })) {
+        tracker.candidate = null;
+      }
+    });
+    tracker.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true,
+      attributes: true, attributeOldValue: true, attributeFilter: ["class", "style", "disabled"] });
+  };
+  const finishQueryObservation = () => queryTracker?.observer?.disconnect();
+
   const exportControl = () => {
     const matches = [...document.querySelectorAll("#crtt_download_xlsx")].filter(visible);
     return matches.length === 1 && !matches[0].disabled ? matches[0] : null;
@@ -244,6 +274,7 @@
         if (normalize(dateField.input.value) !== normalize(value)) {
           return { status: "failed", reason: "清算时间输入框未保留目标日期，未继续查询。" };
         }
+        finishQueryObservation();
         queryTracker = null;
         return { status: "set", value };
       }
@@ -258,6 +289,7 @@
         if (!/^\d{4}\/\d{2}\/\d{2}\s~\s\d{4}\/\d{2}\/\d{2}$/.test(dateField.input.value.trim())) {
           return { status: "failed", reason: "清算时间格式不符合页面要求（yyyy/MM/dd ~ yyyy/MM/dd），未提交查询。" };
         }
+        finishQueryObservation();
         queryTracker = {
           dateValue: dateField.input.value,
           baseline: resultSignature(),
@@ -265,16 +297,20 @@
           candidate: null,
           candidateSince: 0
         };
+        observeQuery(control);
         control.click();
+        queryTracker.observedLoading ||= queryBusy();
         return { status: "clicked" };
       }
       case "queryState": {
         if (!queryTracker) return { status: "waiting" };
         const dateField = field();
         if (dateField.error || dateField.input.value !== queryTracker.dateValue) {
+          finishQueryObservation();
           return { status: "failed", reason: "查询期间清算时间发生变化或无法确认。" };
         }
         if (queryBusy()) {
+          queryTracker.candidate = null;
           queryTracker.observedLoading = true;
           return { status: "waiting" };
         }
@@ -294,6 +330,7 @@
           const count = Number(match[1].replace(/,/g, ""));
           if (count === 0) {
             queryTracker.resultState = "no_data";
+            finishQueryObservation();
             return { status: "no_data", count };
           }
           const currentResult = JSON.parse(signature);
@@ -304,10 +341,12 @@
               const reason = merchantNumbers.length === 0
                 ? "查询结果中未读取到商户号"
                 : `查询结果中出现多个商户号（${merchantNumbers.join("、")}）`;
+              finishQueryObservation();
               return { status: "failed", reason: `${reason}，未申请导出。` };
             }
             const actualMerchantNo = merchantNumbers[0];
             if (expectedMerchantNo && actualMerchantNo !== expectedMerchantNo) {
+              finishQueryObservation();
               return {
                 status: "failed",
                 reason: `当前查询结果商户号 ${actualMerchantNo} 与本次已确认商户号 ${expectedMerchantNo} 不一致，未申请导出。`
@@ -315,6 +354,7 @@
             }
             queryTracker.merchantNo = actualMerchantNo;
             queryTracker.resultState = "ready";
+            finishQueryObservation();
             return { status: "ready", count, merchantNo: actualMerchantNo };
           }
         }

@@ -9,7 +9,7 @@ async function check(states, expectedError) {
   let searches = 0;
   const context = vm.createContext({
     Date: { now: () => now },
-    checkpoint: async () => {}, sleep: async (milliseconds) => { now += milliseconds; },
+    activeNow: () => now, checkpoint: async () => {}, sleep: async (milliseconds) => { now += milliseconds; },
     chrome: { downloads: { search: async (query) => {
       assert.equal(query.startedAfter, "2026-09-30T09:30:00.000Z");
       const regex = new RegExp(query.filenameRegex);

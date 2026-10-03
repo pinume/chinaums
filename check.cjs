@@ -8,7 +8,9 @@ const checks = [
   [path.join(__dirname, 'export-runner.test.cjs'), 'COMPLETED'],
   [path.join(__dirname, 'export-runner.test.cjs'), 'WAITING_GENERATION'],
   [path.join(__dirname, 'export-runner.test.cjs'), 'BLOCKED', 'trade-audit'],
-  [path.join(__dirname, 'trade-download.test.cjs'), 'mixed']
+  [path.join(__dirname, 'trade-download.test.cjs'), 'mixed'],
+  [path.join(__dirname, 'export-runner.test.cjs'), 'STOPPED'],
+  [path.join(__dirname, 'export-runner.test.cjs'), 'STOPPED', 'trade-audit']
 ];
 for (const args of checks) {
   const result = spawnSync(process.execPath, args, { stdio: 'inherit', timeout: 30000 });
