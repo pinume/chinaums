@@ -11,7 +11,7 @@ class Clock extends Date {
 }
 const context = vm.createContext({ Date: Clock, reportType: 'trade-audit', tabId: 1,
   normalize: value => String(value || '').toUpperCase(), state: {months: {}},
-  checkpoint: async () => {}, sleep: async ms => { now += ms; }
+  activeNow: () => now, checkpoint: async () => {}, sleep: async ms => { now += ms; }
 });
 for (const file of ['monthly-runner.js', 'download-runner.js']) {
   vm.runInContext(fs.readFileSync(`${__dirname}/${file}`, 'utf8'), context);

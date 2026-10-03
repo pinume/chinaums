@@ -38,7 +38,8 @@
     gate,
     checkpoint,
     sleep,
-    transition
+    transition,
+    now = () => Date.now()
   }) => {
     const expectedCount = submittedMonths.length;
     if (!expectedCount) return [];
@@ -55,6 +56,38 @@
     if (!new Set(["clicked", "already_open"]).has(opened?.status)) {
       throw new Error(`无法安全打开下载暂存列表（${opened?.status || "无返回状态"}）：${opened?.reason || "页面操作未能确认"}；本轮已提交任务保留在远端。`);
     }
+
+    const closeListAndWait = async () => {
+      const closed = await invoke("closeDownloadList", {});
+      if (!["closed", "already_closed"].includes(closed?.status)) {
+        throw new Error("无法关闭暂存列表；已停止自动下载。");
+      }
+      const closeDeadline = now() + (reportType === "trade-audit" ? 30000 : 5000);
+      let closeAttempts = 1;
+      let lastCloseStatus = closed.status;
+      let lastListStatus;
+      let listClosed = closed.status === "already_closed";
+      while (!listClosed) {
+        await checkpoint();
+        const list = await invoke("parseDownloadTasks", {});
+        lastListStatus = list?.status || "unknown";
+        if (["not_found", "not_open"].includes(list?.status)) { listClosed = true; break; }
+        if (reportType === "trade-audit") {
+          if (now() >= closeDeadline) break;
+          await sleep(1000);
+          if (now() >= closeDeadline) break;
+          const retry = await invoke("closeDownloadList", {});
+          closeAttempts += 1;
+          lastCloseStatus = retry?.status || "unknown";
+          if (lastCloseStatus === "already_closed") { listClosed = true; break; }
+          if (lastCloseStatus !== "closed") break;
+          continue;
+        }
+        if (now() >= closeDeadline) break;
+        await sleep(200);
+      }
+      if (!listClosed) throw new Error(`暂存列表关闭结果无法确认（关闭返回 ${lastCloseStatus}，列表状态 ${lastListStatus}，尝试 ${closeAttempts} 次）；已停止自动下载。`);
+    };
 
     let consecutiveParseErrors = 0;
     let lastList = null;
@@ -76,8 +109,8 @@
     };
 
     const waitForDownloadList = async (required = true) => {
-      const deadline = Date.now() + 15000;
-      while (Date.now() < deadline) {
+      const deadline = now() + 15000;
+      while (now() < deadline) {
         await checkpoint();
         const list = await parseTasks();
         if (["found", "empty"].includes(list?.status)) return true;
@@ -112,12 +145,12 @@
           if (hintedPages) { cachedTotal = null; return scanCurrentRunTasks(); }
           return null;
         }
-        const deadline = Date.now() + 15000;
+        const deadline = now() + 15000;
         while (true) {
           await checkpoint();
           list = await parseTasks();
           if (["found", "empty"].includes(list?.status) && Number(list.page) === firstPage && JSON.stringify((list.rows || []).map((row) => row.fileName)) !== oldRows) break;
-          if (Date.now() >= deadline) break;
+          if (now() >= deadline) break;
           await sleep(200);
         }
         if (Number(list?.page) !== firstPage || JSON.stringify((list.rows || []).map((row) => row.fileName)) === oldRows) {
@@ -161,13 +194,13 @@
           if (hintedPages) { cachedTotal = null; return scanCurrentRunTasks(); }
           return null;
         }
-        const deadline = Date.now() + 15000;
+        const deadline = now() + 15000;
         let arrived = false;
         while (true) {
           await checkpoint();
           const after = await parseTasks();
           if (["found", "empty"].includes(after?.status) && Number(after.page) > oldPage && JSON.stringify((after.rows || []).map((row) => row.fileName)) !== oldRows) { arrived = true; break; }
-          if (Date.now() >= deadline) break;
+          if (now() >= deadline) break;
           await sleep(200);
         }
         if (!arrived) {
@@ -235,13 +268,13 @@
             if (selected?.status !== "clicked" && selected?.status !== "already_current") {
               throw new Error(`无法回到暂存任务所在的第 ${task.page} 页；未点击该文件。`);
             }
-            const deadline = Date.now() + 15000;
+            const deadline = now() + 15000;
             let arrived = false;
             while (true) {
               await checkpoint();
               const current = await parseTasks();
               if (current?.status === "found" && Number(current.page) === task.page && current.rows.some((row) => row.fileName === task.fileName)) { arrived = true; break; }
-              if (Date.now() >= deadline) break;
+              if (now() >= deadline) break;
               await sleep(200);
             }
             if (!arrived) throw new Error("暂存列表翻页结果无法确认，停止下载。");
@@ -263,44 +296,16 @@
         throw new Error("本轮任务未能在暂存文件保留期限前全部生成；自动流程停止，请手动核对。 ");
       }
       const readyCount = tasks.filter((task) => !downloaded.has(task.fileName) && task.statusCode === "ready" && task.downloadEnabled === true).length;
-      generationWaitStartedAt ??= Date.now();
+      generationWaitStartedAt ??= now();
       await transition({ status: "WAITING_GENERATION", found: associatedByFile.size, ready: readyCount, expected: expectedCount,
-        waitedMs: Date.now() - generationWaitStartedAt, remaining: expectedCount - downloaded.size,
+        waitedMs: now() - generationWaitStartedAt, remaining: expectedCount - downloaded.size,
         listStatus: lastList?.status || "unknown", parsedRows: lastList?.rows?.length || 0, rejected });
       for (let second = 0; second < 10; second += 1) {
         await checkpoint();
         await sleep(1000);
       }
       await checkpoint();
-      const closed = await invoke("closeDownloadList", {});
-      if (!["closed", "already_closed"].includes(closed?.status)) {
-        throw new Error("无法关闭暂存列表以更新任务状态；已停止自动下载。");
-      }
-      const closeDeadline = Date.now() + (reportType === "trade-audit" ? 30000 : 5000);
-      let closeAttempts = 1;
-      let lastCloseStatus = closed.status;
-      let lastListStatus;
-      let listClosed = closed.status === "already_closed";
-      while (!listClosed) {
-        await checkpoint();
-        const list = await invoke("parseDownloadTasks", {});
-        lastListStatus = list?.status || "unknown";
-        if (["not_found", "not_open"].includes(list?.status)) { listClosed = true; break; }
-        if (reportType === "trade-audit") {
-          if (Date.now() >= closeDeadline) break;
-          await sleep(1000);
-          if (Date.now() >= closeDeadline) break;
-          const retry = await invoke("closeDownloadList", {});
-          closeAttempts += 1;
-          lastCloseStatus = retry?.status || "unknown";
-          if (lastCloseStatus === "already_closed") { listClosed = true; break; }
-          if (lastCloseStatus !== "closed") break;
-          continue;
-        }
-        if (Date.now() >= closeDeadline) break;
-        await sleep(200);
-      }
-      if (!listClosed) throw new Error(`暂存列表关闭结果无法确认（关闭返回 ${lastCloseStatus}，列表状态 ${lastListStatus}，尝试 ${closeAttempts} 次）；已停止自动下载。`);
+      await closeListAndWait();
       let reopened;
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
@@ -321,10 +326,7 @@
     }
 
     await transition({ status: "DOWNLOAD_REQUESTS_SENT", count: associatedTasks.length });
-    const closed = await invoke("closeDownloadList", {});
-    if (!new Set(["closed", "already_closed"]).has(closed?.status)) {
-      throw new Error("本轮下载请求已触发，但暂存列表右上角未能安全关闭；请手动关闭列表并检查 Chrome 下载记录。");
-    }
+    await closeListAndWait();
     return associatedTasks;
   };
 

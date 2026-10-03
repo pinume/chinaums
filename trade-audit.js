@@ -138,6 +138,35 @@
       (button && (button.disabled || /查询中|加载中/.test(textOf(button))))
     );
   };
+  // Record short loading cycles and redraws even when the next poll sees identical results.
+  const observeQuery = (control) => {
+    const tracker = queryTracker;
+    if (typeof MutationObserver !== "function") return;
+    tracker.observer = new MutationObserver((records) => {
+      if (queryTracker !== tracker) return;
+      const loadingSelector = ".el-loading-mask,.layui-layer-loading,.loading";
+      if (queryBusy() || records.some((record) =>
+        (record.target instanceof Element && record.target.matches(loadingSelector)) ||
+        [...(record.addedNodes || []), ...(record.removedNodes || [])].some((node) =>
+          node instanceof Element && (node.matches(loadingSelector) || node.querySelector(loadingSelector))) ||
+        (record.target === control && record.attributeName === "disabled" && record.oldValue !== null))) {
+        tracker.observedLoading = true;
+        tracker.candidate = null;
+      }
+      if (records.some((record) => {
+        if (!["childList", "characterData"].includes(record.type)) return false;
+        const target = record.target instanceof Element ? record.target : record.target.parentElement;
+        const result = target?.closest(".el-table__body-wrapper,.el-table__empty-block,.el-table__empty-text,.el-empty__description");
+        return result && !result.closest(".el-dialog");
+      })) {
+        tracker.candidate = null;
+      }
+    });
+    tracker.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true,
+      attributes: true, attributeOldValue: true, attributeFilter: ["class", "style", "disabled"] });
+  };
+  const finishQueryObservation = () => queryTracker?.observer?.disconnect();
+
   const dialogTexts = () => [...document.querySelectorAll(
     '[role="dialog"],[aria-modal="true"],.el-message-box,.el-dialog'
   )]
@@ -318,6 +347,7 @@
         if (updated.error || normalizeRangeValue(updated.input.value) !== expected) {
           return { status: "failed", reason: "日期控件显示范围与目标月份不一致，已停止。", value: updated.input?.value ?? null };
         }
+        finishQueryObservation();
         queryTracker = null;
         return { status: "set", value: updated.input.value };
       }
@@ -329,6 +359,7 @@
         if (date.error || !date.input.value.trim()) {
           return { status: "failed", reason: date.error || "交易日期为空，未提交查询。" };
         }
+        finishQueryObservation();
         queryTracker = {
           dateValue: date.input.value,
           baseline: querySignature(),
@@ -336,16 +367,20 @@
           candidate: null,
           candidateSince: 0
         };
+        observeQuery(control);
         control.click();
+        queryTracker.observedLoading ||= queryBusy();
         return { status: "clicked" };
       }
       case "queryState": {
         if (!queryTracker) return { status: "waiting" };
         const date = tradeDateInput();
         if (date.error || date.input.value !== queryTracker.dateValue) {
+          finishQueryObservation();
           return { status: "failed", reason: "查询期间交易日期发生变化或无法确认。" };
         }
         if (queryBusy()) {
+          queryTracker.candidate = null;
           queryTracker.observedLoading = true;
           return { status: "waiting" };
         }
@@ -368,14 +403,17 @@
           .some((element) => /暂无数据/.test(textOf(element)) && !/请根据条件查询/.test(textOf(element)));
         if (count === 0 || (count === null && noDataText)) {
           queryTracker.resultState = "no_data";
+          finishQueryObservation();
           return { status: "no_data", count: count ?? 0 };
         }
         if (count !== null && currentResult.rows.length > 0 && exportButton && listButton) {
           const merchants = queryMerchantIds();
           if (merchants.length !== 1 || (args.targetMerchantId && merchants[0] !== args.targetMerchantId)) {
+            finishQueryObservation();
             return { status: "failed", reason: "查询结果没有唯一商户身份或与本轮商户不一致；未申请导出。" };
           }
           queryTracker.resultState = "ready";
+          finishQueryObservation();
           queryTracker.merchantId = merchants[0];
           return { status: "ready", count, merchantId: merchants[0] };
         }

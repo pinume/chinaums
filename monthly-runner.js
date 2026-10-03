@@ -18,7 +18,7 @@
     (_, index) => makeMonthRange(today.getFullYear(), index + 1, today)
   );
 
-  const run = async ({ months, reportType, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, reconcileUnknown, onMerchantVerified }) => {
+  const run = async ({ months, reportType, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, reconcileUnknown, onMerchantVerified, now = () => Date.now() }) => {
     if (!Array.isArray(months) || !months.length) throw new Error("没有可执行的月份。");
     const results = [];
     let throttleAttempts = 0;
@@ -34,14 +34,14 @@
 
     const waitForDialogClear = async () => {
       if (!["account-detail", "trade-audit"].includes(reportType)) return;
-      const deadline = Date.now() + 10000;
+      const deadline = now() + 10000;
       let clearSince = null;
-      while (Date.now() < deadline) {
+      while (now() < deadline) {
         await checkpoint();
         const result = await invoke("submitDialogState", {});
         if (result?.status === "clear") {
-          clearSince ??= Date.now();
-          if (Date.now() - clearSince >= 1000) return;
+          clearSince ??= now();
+          if (now() - clearSince >= 1000) return;
         } else if (result?.status === "visible") {
           clearSince = null;
         } else {
@@ -78,9 +78,9 @@
       }
       await transition({ month: month.key, status: "QUERYING" });
 
-      const queryDeadline = Date.now() + 120000;
+      const queryDeadline = now() + 120000;
       let queryState = { status: "waiting" };
-      while (Date.now() < queryDeadline) {
+      while (now() < queryDeadline) {
         await checkpoint();
         queryState = await invoke("queryState", { targetMerchantNo: activeMerchantNo || null, targetMerchantId: activeMerchantId });
         if (queryState?.status === "failed") {
@@ -150,9 +150,9 @@
           throw new Error(`${month.key} 导出已锁定：${submit?.reason || "控件状态未确认"}`);
         }
 
-        const responseDeadline = Date.now() + 12000;
+        const responseDeadline = now() + 12000;
         let response = { status: "unknown" };
-        while (submit?.status === "clicked" && Date.now() < responseDeadline) {
+        while (submit?.status === "clicked" && now() < responseDeadline) {
           await checkpoint();
           try {
             response = await invoke("classifySubmit", {});
@@ -184,34 +184,34 @@
             throw new Error(`${month.key} 已确认服务器接受申请；本月已记为已提交，提示框关闭失败（${closed?.reason || closed?.status || "未知状态"}）。`);
           }
           await waitForDialogClear();
-          const deadline = Date.now() + 15000;
+          const deadline = now() + 15000;
           let task = null;
           let snapshotReason = "";
-          while (Date.now() < deadline) {
+          while (now() < deadline) {
             await checkpoint();
             let snapshot;
             try {
-              snapshot = await invoke("snapshotExportTasks", { operationDeadline: deadline });
+              snapshot = await invoke("snapshotExportTasks", { operationDeadline: Date.now() + Math.max(0, deadline - now()) });
             } catch (error) {
               if (error?.message === "STOPPED_BY_USER") throw error;
               snapshotReason = error?.message || "暂存读取未响应";
-              await sleep(Math.max(0, Math.min(500, deadline - Date.now())));
+              await sleep(Math.max(0, Math.min(500, deadline - now())));
               continue;
             }
-            if (Date.now() >= deadline) break;
+            if (now() >= deadline) break;
             if (snapshot?.status !== "found" || !Array.isArray(snapshot.rows)) {
               snapshotReason = snapshot?.reason || snapshot?.status || "暂存读取无返回结果";
               if (!["unknown", "loading", "empty"].includes(snapshot?.status)) {
                 throw new Error(`${month.key} 已提交，但无法核对新建暂存任务（${snapshotReason}）；禁止重提。`);
               }
-              await sleep(Math.max(0, Math.min(500, deadline - Date.now())));
+              await sleep(Math.max(0, Math.min(500, deadline - now())));
               continue;
             }
             snapshotReason = "";
             const added = snapshot.rows.filter((row) => !previousIds.has(row.id));
             if (added.length > 1) throw new Error(`${month.key} 已提交，但出现多个新暂存任务，无法唯一确认归属；禁止重提。`);
             if (added.length === 1) { task = added[0]; break; }
-            await sleep(Math.max(0, Math.min(500, deadline - Date.now())));
+            await sleep(Math.max(0, Math.min(500, deadline - now())));
           }
           if (!task) throw new Error(`${month.key} 已提交，但15秒内未确认新建暂存任务${snapshotReason ? `（${snapshotReason}）` : ""}；禁止重提。`);
           const match = task?.fileName?.match(activeMerchantId
@@ -238,7 +238,7 @@
           throttleAttempts += 1;
           const waitMs = Math.min(30000 * 2 ** (throttleAttempts - 1), 120000);
           await transition({ month: month.key, status: "WAITING_FOR_SLOT", retryInMs: waitMs, attempt: throttleAttempts });
-          const end = Date.now() + waitMs;
+          const end = now() + waitMs;
           if (reportType === "account-detail") {
             const files = new Set(results.filter((item) => item.status === "SUBMITTED")
               .map((item) => item.remoteFileName).filter(Boolean));
@@ -248,8 +248,8 @@
             const closeSlotList = async () => {
               const closedList = await invoke("closeDownloadList", {});
               if (!["closed", "already_closed"].includes(closedList?.status)) throw new Error("限流等待期间暂存列表无法关闭。");
-              const deadline = Date.now() + 5000;
-              while (Date.now() < deadline) {
+              const deadline = now() + 5000;
+              while (now() < deadline) {
                 await checkpoint();
                 if (["not_found", "not_open"].includes((await invoke("parseDownloadTasks", {}))?.status)) { listOpened = false; return; }
                 await sleep(200);
@@ -257,19 +257,19 @@
               throw new Error("限流等待期间暂存列表关闭结果无法确认。");
             };
             try {
-              while (files.size && Date.now() < end) {
+              while (files.size && now() < end) {
                 await checkpoint();
                 const opened = await invoke("openDownloadList", {});
                 if (!["clicked", "already_open"].includes(opened?.status)) break;
                 listOpened = true;
-                const readDeadline = Math.min(end, Date.now() + 15000);
+                const readDeadline = Math.min(end, now() + 15000);
                 let list;
                 do {
                   await checkpoint();
                   list = await invoke("parseDownloadTasks", {});
                   if (["found", "empty", "refresh_error"].includes(list?.status)) break;
                   await sleep(200);
-                } while (Date.now() < readDeadline);
+                } while (now() < readDeadline);
                 if (list?.status !== "found") break;
                 const pageSize = await invoke("setDownloadPageSize", {});
                 if (pageSize?.status === "set") {
@@ -278,17 +278,17 @@
                     list = await invoke("parseDownloadTasks", {});
                     if (["found", "empty", "refresh_error"].includes(list?.status)) break;
                     await sleep(200);
-                  } while (Date.now() < readDeadline);
+                  } while (now() < readDeadline);
                 }
                 const rows = list?.rows?.filter((row) => files.has(row.fileName)) || [];
                 if (list?.status !== "found" || rows.length !== files.size || new Set(rows.map((row) => row.fileName)).size !== files.size || rows.some((row) => !["pending", "ready"].includes(row.statusCode))) break;
                 const pending = rows.filter((row) => row.statusCode === "pending").length;
-                await transition({ month: month.key, status: "WAITING_FOR_SLOT", retryInMs: Math.max(0, end - Date.now()), attempt: throttleAttempts, pending, generated: rows.length - pending });
+                await transition({ month: month.key, status: "WAITING_FOR_SLOT", retryInMs: Math.max(0, end - now()), attempt: throttleAttempts, pending, generated: rows.length - pending });
                 await closeSlotList();
                 if (baselinePending !== null && pending < baselinePending) { slotReleased = true; break; }
                 if (pending === 0) break;
                 baselinePending = pending;
-                await sleep(Math.min(10000, Math.max(0, end - Date.now())));
+                await sleep(Math.min(10000, Math.max(0, end - now())));
               }
             } catch (error) {
               if (error?.message === "STOPPED_BY_USER") throw error;
@@ -298,14 +298,14 @@
                 await closeSlotList();
               }
             }
-            if (slotReleased || Date.now() >= end) {
+            if (slotReleased || now() >= end) {
               // 名额释放或等待窗口结束后，服务器仍是是否允许申请的最终判断。
               continue;
             }
           }
-          while (Date.now() < end) {
+          while (now() < end) {
             await checkpoint();
-            await sleep(Math.min(1000, end - Date.now()));
+            await sleep(Math.min(1000, end - now()));
           }
           continue;
         }
