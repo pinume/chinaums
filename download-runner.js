@@ -177,6 +177,8 @@
       await checkpoint();
       const scanned = await scanCurrentRunTasks();
       tasks = scanned || [];
+      const failedTask = tasks.find((task) => !downloaded.has(task.fileName) && task.statusCode === "failed");
+      if (failedTask) throw new Error(`文件 ${failedTask.fileName} 生成失败（${failedTask.status}）；停止等待，请核对服务器暂存任务。`);
       if (tasks.length === expectedCount) {
         if (reportType === "trade-audit" && !merchantNo) {
           const merchants = [...new Set(tasks.map((task) => task.fileName.match(/^MER_([A-Z0-9]+)_/i)?.[1]?.toUpperCase()))];
@@ -284,3 +286,4 @@
 
   globalThis.CHINAUMS_DOWNLOAD_RUNNER = Object.freeze({ run, timestampFromFileName });
 })();
+

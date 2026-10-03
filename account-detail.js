@@ -144,7 +144,7 @@
           createdAt: cells[0] || "",
           fileName: cells[1] || "",
           status,
-          statusCode: ["排队中", "生成中"].includes(status) ? "pending" : status === "已生成" ? "ready" : "unknown",
+          statusCode: ["排队中", "生成中"].includes(status) ? "pending" : status === "已生成" ? "ready" : /^(?:处理失败|生成失败|导出失败)$/.test(status) ? "failed" : "unknown",
           downloadEnabled: downloadEnabled(element)
         };
       });
@@ -391,19 +391,36 @@
         return { status: "controls_missing", reason: `等待 5 秒后，下载暂存列表入口仍不可用（可见 ${matches.length} 个，禁用 ${Boolean(matches[0]?.disabled)}）。` };
       }
       case "snapshotExportTasks": {
-        const rows = [];
-        for (let page = 1; page <= 100; page += 1) {
-          const response = await fetch(`/uisportal/accountCheckDetailQry/selectDeailBillList?page.size=100&page=${page}`);
-          if (!response.ok) throw new Error("读取对账暂存任务失败。");
-          const data = await response.json();
-          if (data.respCode !== "000000" || !Array.isArray(data.list?.content)) throw new Error("对账暂存接口结构异常。");
-          rows.push(...data.list.content.map((row) => ({ id: String(row.export_id || ""), fileName: row.file_name })));
-          if (page >= Number(data.list.totalPages)) {
-            if (rows.length !== Number(data.list.totalElements) || rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("对账暂存任务分页不完整或身份重复。");
-            return { status: "found", rows };
+        const deadline = args.operationDeadline ?? Date.now() + 15000;
+        const controller = new AbortController();
+        const checkDeadline = () => {
+          if (controller.signal.aborted || Date.now() >= deadline) {
+            controller.abort();
+            throw new Error("暂存任务读取已超过截止时间。");
           }
+        };
+        checkDeadline();
+        const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+        try {
+          const rows = [];
+          for (let page = 1; page <= 100; page += 1) {
+            checkDeadline();
+            const response = await fetch(`/uisportal/accountCheckDetailQry/selectDeailBillList?page.size=100&page=${page}`, { signal: controller.signal });
+            checkDeadline();
+            if (!response.ok) throw new Error("读取对账暂存任务失败。");
+            const data = await response.json();
+            checkDeadline();
+            if (data.respCode !== "000000" || !Array.isArray(data.list?.content)) throw new Error("对账暂存接口结构异常。");
+            rows.push(...data.list.content.map((row) => ({ id: String(row.export_id || ""), fileName: row.file_name })));
+            if (page >= Number(data.list.totalPages)) {
+              if (rows.length !== Number(data.list.totalElements) || rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("对账暂存任务分页不完整或身份重复。");
+              return { status: "found", rows };
+            }
+          }
+          throw new Error("对账暂存任务页数超出读取范围。");
+        } finally {
+          clearTimeout(timer);
         }
-        throw new Error("对账暂存任务页数超出读取范围。");
       }
       case "parseDownloadTasks":
         return scanDownloadTasks();
@@ -497,3 +514,4 @@
     }
   };
 })();
+

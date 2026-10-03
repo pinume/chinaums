@@ -142,7 +142,7 @@
     }
     return { status: "unknown" };
   };
-  const statusCode = (status) => status === "待处理" ? "pending" : status === "处理成功" ? "ready" : "unknown";
+  const statusCode = (status) => status === "待处理" ? "pending" : status === "处理成功" ? "ready" : /^(?:处理失败|生成失败|导出失败)$/.test(status) ? "failed" : "unknown";
 
   const downloadTable = (dialog) => {
     const tables = [...dialog.querySelectorAll(".el-table")].filter(visible);
@@ -398,27 +398,45 @@
         return { status: "clicked" };
       }
       case "snapshotExportTasks": {
-        const component = reportComponent();
-        if (!component?.$axiosApi?.axiosPromisePara) throw new Error("无法读取以旧换新暂存接口。");
-        const day = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-        const today = new Date();
-        const start = new Date(today); start.setDate(start.getDate() - 7);
-        const rows = [];
-        for (let current = 0; current < 100; current += 1) {
-          const response = await component.$axiosApi.axiosPromisePara({
-            searchObj: "1", size: 100, current,
-            beginApplyDate: `${day(start)} 00:00:00`, endApplyDate: `${day(today)} 23:59:59`
-          }, "uis-tradein-server/portal/yjhx/v3/qryExportDtls", {
-            headers: { userPortalToken: localStorage.getItem("userPortalVerifyToken") }
-          });
-          if (!response?.success || !Array.isArray(response.data?.list)) throw new Error("以旧换新暂存接口结构异常。");
-          rows.push(...response.data.list.map((row) => ({ id: String(row.id || ""), fileName: row.exportFileName })));
-          if (current + 1 >= Number(response.data.pages)) {
-            if (rows.length !== Number(response.data.total) || rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("以旧换新暂存任务分页不完整或身份重复。");
-            return { status: "found", rows };
+        const deadline = args.operationDeadline ?? Date.now() + 15000;
+        const controller = new AbortController();
+        const checkDeadline = () => {
+          if (controller.signal.aborted || Date.now() >= deadline) {
+            controller.abort();
+            throw new Error("暂存任务读取已超过截止时间。");
           }
+        };
+        checkDeadline();
+        const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+        try {
+          const component = reportComponent();
+          if (!component?.$axiosApi?.axiosPromisePara) throw new Error("无法读取以旧换新暂存接口。");
+          const day = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+          const today = new Date();
+          const start = new Date(today); start.setDate(start.getDate() - 7);
+          const rows = [];
+          for (let current = 0; current < 100; current += 1) {
+            checkDeadline();
+            const response = await component.$axiosApi.axiosPromisePara({
+              searchObj: "1", size: 100, current,
+              beginApplyDate: `${day(start)} 00:00:00`, endApplyDate: `${day(today)} 23:59:59`
+            }, "uis-tradein-server/portal/yjhx/v3/qryExportDtls", {
+              signal: controller.signal,
+              timeout: Math.max(1, deadline - Date.now()),
+              headers: { userPortalToken: localStorage.getItem("userPortalVerifyToken") }
+            });
+            checkDeadline();
+            if (!response?.success || !Array.isArray(response.data?.list)) throw new Error("以旧换新暂存接口结构异常。");
+            rows.push(...response.data.list.map((row) => ({ id: String(row.id || ""), fileName: row.exportFileName })));
+            if (current + 1 >= Number(response.data.pages)) {
+              if (rows.length !== Number(response.data.total) || rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("以旧换新暂存任务分页不完整或身份重复。");
+              return { status: "found", rows };
+            }
+          }
+          throw new Error("以旧换新暂存任务页数超出读取范围。");
+        } finally {
+          clearTimeout(timer);
         }
-        throw new Error("以旧换新暂存任务页数超出读取范围。");
       }
       case "parseDownloadTasks":
         return parseDownloadTaskList();

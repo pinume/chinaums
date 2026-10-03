@@ -295,8 +295,15 @@ const injectedAdapters = new Set();
 const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => {
   await checkpoint();
   if (operation === "confirmDownload") return waitForDownload(args);
+  const defaultLimit = reportType === "trade-audit" && operation === "setDateRange" ? 60000 : 15000;
+  const operationDeadline = Math.min(Date.now() + defaultLimit, args.operationDeadline ?? Infinity);
+  const checkDeadline = () => {
+    if (Date.now() >= operationDeadline) throw new Error(`页面操作“${operation}”已超过截止时间。`);
+  };
+  checkDeadline();
   return withTimeout((async () => {
     const frameId = await currentFrameId(reportType, targetTabId);
+    checkDeadline();
     if (frameId === null) return { status: "wrong_page", reason: "未找到当前报表页面或业务 frame。" };
     const file = reportType === "account-detail" ? "account-detail.js" : "trade-audit.js";
     const globalName = reportType === "account-detail"
@@ -308,22 +315,25 @@ const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => 
       func: (name) => typeof globalThis[name] === "function",
       args: [globalName]
     });
+    checkDeadline();
     const injectionKey = `${targetTabId}:${frameId}:${file}`;
     if (!injectedAdapters.has(injectionKey) || loaded[0]?.result !== true) {
       await chrome.scripting.executeScript({ target: { tabId: targetTabId, frameIds: [frameId] }, world, files: [file] });
       injectedAdapters.add(injectionKey);
     }
+    checkDeadline();
     const result = await chrome.scripting.executeScript({
       target: { tabId: targetTabId, frameIds: [frameId] }, world,
       func: async (name, action, actionArgs) => {
+        if (Date.now() >= actionArgs.operationDeadline) throw new Error("页面操作已超过截止时间，未执行。");
         const adapter = globalThis[name];
         if (typeof adapter !== "function") return { status: "adapter_missing" };
         return await adapter(action, actionArgs);
       },
-      args: [globalName, operation, args]
+      args: [globalName, operation, { ...args, operationDeadline }]
     });
     return result[0]?.result || { status: "unknown" };
-  })(), reportType === "trade-audit" && operation === "setDateRange" ? 60000 : 15000, operation);
+  })(), Math.max(0, operationDeadline - Date.now()), operation);
 };
 
 const navigateToReport = async () => {
@@ -608,3 +618,4 @@ run().catch(async (error) => {
     elements.close.disabled = false;
   }
 });
+

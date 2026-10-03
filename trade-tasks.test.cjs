@@ -9,6 +9,7 @@ class Element {
   getAttribute() {return null;}
   closest(selector) {return selector === '.el-dialog__wrapper' ? this.wrapper || null : null;}
 }
+let failed = false;
 let clicked = 0, ready = false, hidden = false, opening = 0, loading = false;
 let now = new Date(2026,8,30,18,13,40).getTime();
 const steps = [];
@@ -19,7 +20,7 @@ const control = new Element('下载'); control.click = () => clicked++;
 control.classList = {contains: name => !ready && name === 'is-disabled'};
 const row = new Element();
 row.children = ['2026-09-30 18:13:40', fileName, '', '下载'].map(text => {
-  const cell = new Element(text);cell.tagName = 'TD'; cell.querySelectorAll = s => s === '.cell' ? [new Element(text || (ready ? '处理成功' : '待处理'))] : s === 'a,button,[role="button"]' ? [control] : [];return cell;
+  const cell = new Element(text);cell.tagName = 'TD'; cell.querySelectorAll = s => s === '.cell' ? [new Element(text || (failed ? '处理失败' : ready ? '处理成功' : '待处理'))] : s === 'a,button,[role="button"]' ? [control] : [];return cell;
 });
 row.querySelectorAll = s => s === 'td' ? row.children : [];
 const body = new Element(); body.querySelectorAll = s => s === 'tbody > tr' ? [row] : [];
@@ -46,6 +47,18 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
 (async () => {
   const adapter = context.__chinaumsTradeAuditAdapter;
   let parsed = await adapter('parseDownloadTasks'); assert.equal(parsed.status,'found'); assert.equal(parsed.rows[0].statusCode,'pending'); assert.equal(parsed.rows[0].downloadEnabled,false);
+  failed = true;
+  parsed = await adapter('parseDownloadTasks');
+  assert.equal(parsed.rows[0].statusCode,'failed');
+  vm.runInContext(fs.readFileSync(__dirname+'/download-runner.js','utf8'), context);
+  await assert.rejects(context.CHINAUMS_DOWNLOAD_RUNNER.run({
+    reportType:'trade-audit',merchantNo:'89813014812B1L3',gate:{},startedAt:new Date(now).toISOString(),
+    submittedMonths:[{month:'2026-09',remoteFileName:fileName,submittedAt:new Date(now).toISOString()}],
+    checkpoint:async()=>{},sleep:async()=>{throw new Error('must not wait for failed generation');},transition:async()=>{},
+    invoke:async op=>op==='openDownloadList'?{status:'already_open'}:adapter(op)
+  }), /生成失败.*处理失败/);
+  assert.equal(clicked,0);
+  failed = false;
   const args = {fileName, targetMerchantNo:'89813014812B1L3', gate:{allowed:true,merchantNo:'89813014812B1L3'}};
   assert.equal((await adapter('downloadTask',args)).status,'not_ready');
   ready = true;parsed = await adapter('parseDownloadTasks');assert.equal(parsed.rows[0].statusCode,'ready');assert.equal(parsed.rows[0].downloadEnabled,true);
@@ -104,3 +117,4 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   assert.equal((await adapter('parseDownloadTasks')).status,'not_open', 'the wrapper may point directly to ElDialog after transition');
   console.log('PASS: loading-safe dialog opening, actual Element table layout, pending/disabled, successful downloads and foreign merchant rejection');
 })().catch(e => {console.error(e);process.exitCode = 1;});
+
