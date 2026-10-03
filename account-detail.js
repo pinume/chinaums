@@ -218,6 +218,8 @@
     }
 
     switch (operation) {
+      case "submitDialogState":
+        return { status: visibleModals().filter((dialog) => textOf(dialog)).length === 0 ? "clear" : "visible" };
       case "inspect": {
         const dateField = field();
         return {
@@ -246,6 +248,7 @@
         return { status: "set", value };
       }
       case "query": {
+        if (visibleModals().filter((dialog) => textOf(dialog)).length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不启动下一次查询。" };
         const control = queryControl();
         if (!control) return { status: "controls_missing", reason: "“查询”按钮缺失或不唯一。" };
         const dateField = field();
@@ -318,6 +321,7 @@
         return { status: "waiting" };
       }
       case "submitExport": {
+        if (visibleModals().filter((dialog) => textOf(dialog)).length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不申请导出。" };
         const gate = args.gate;
         if (gate?.allowed !== true || normalize(gate.merchantNo) !== normalize(args.targetMerchantNo) ||
           queryTracker?.merchantNo !== normalize(args.targetMerchantNo) || !args.targetMerchantNo) {
@@ -334,6 +338,7 @@
         return classifySubmit();
       case "closeSubmitDialog": {
         const result = classifySubmit();
+        if (visibleModals().filter((dialog) => textOf(dialog)).length === 0) return { status: "closed" };
         if (!["accepted", "throttled", "failed"].includes(result.status)) {
           return { status: "blocked", reason: "没有可安全关闭的已识别提交提示。" };
         }

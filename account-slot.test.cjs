@@ -12,6 +12,7 @@ async function check(mode) {
     months:[1,2].map(m=>({key:`2026-0${m}`,start:`2026-0${m}-01`,end:`2026-0${m}-28`})),reportType:'account-detail',gate:{},
     checkpoint:async()=>{},sleep:async ms=>{now+=ms;},transition:async e=>{events.push(e);if(e.month)month=e.month;if(e.status==='WAITING_FOR_SLOT'&&waitStart===undefined)waitStart=now;},
     invoke:async op=>{
+      if(op==='submitDialogState')return {status:'clear'};
       if(op==='setDateRange')return {status:'set'};
       if(op==='query')return {status:'clicked'};
       if(op==='queryState')return {status:'ready',count:1,merchantNo:merchant};
