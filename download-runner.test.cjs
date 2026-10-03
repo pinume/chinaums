@@ -57,7 +57,7 @@ async function check(failure) {
         case "setDownloadPageSize": return { status: "unchanged" };
         case "openDownloadList":
           opens += 1;
-          if (failure === "reopen" && opens === 2) return { status: "controls_missing" };
+          if (failure === "reopen" && opens >= 2) return { status: "controls_missing" };
           openingReads = failure === "delayed-open" ? 3 : 0;
           opened = true;
           return { status: "clicked" };
@@ -162,3 +162,4 @@ async function check(failure) {
   console.log("PASS: ready files download first without duplicates; disabled controls, ambiguous time fallback and refresh failures stay guarded");
 })().catch((error) => { console.error(error); process.exitCode = 1; })
   .finally(() => { Date.now = originalDateNow; });
+

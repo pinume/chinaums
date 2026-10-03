@@ -1,6 +1,21 @@
 (() => {
   const ROUTE = "/uisportalfront";
   let queryTracker = null;
+  let downloadRefresh = null;
+  const beginDownloadRefresh = () => {
+    downloadRefresh?.observer?.disconnect();
+    const tracker = { startedAt: performance.now(), candidate: null, candidateSince: 0, completed: null };
+    tracker.capture = (entries) => {
+      const completed = entries.filter((entry) => entry.name.includes("/qryExportDtls") &&
+        entry.startTime >= tracker.startedAt && entry.responseEnd >= entry.startTime).at(-1);
+      if (completed) tracker.completed = completed;
+    };
+    if (typeof PerformanceObserver === "function") {
+      tracker.observer = new PerformanceObserver((list) => tracker.capture(list.getEntries()));
+      tracker.observer.observe({ entryTypes: ["resource"] });
+    }
+    downloadRefresh = tracker;
+  };
   const clean = (value, limit = 240) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
   const normalize = (value) => clean(value, 500).replace(/\s/g, "");
   const visible = (element) => {
@@ -191,6 +206,24 @@
     if (!dialog) return { status: "not_open" };
     if (dialogs.length !== 1) return { status: "parse_error", rows: [] };
     if (queryBusy() || !visible(dialog)) return { status: "loading" };
+    if (downloadRefresh) {
+      downloadRefresh.capture(downloadRefresh.observer?.takeRecords() || []);
+      downloadRefresh.capture(performance.getEntriesByType("resource"));
+      const completed = downloadRefresh.completed;
+      if (!completed) return { status: "loading" };
+      if (completed.responseStatus !== undefined && (completed.responseStatus === 0 || completed.responseStatus >= 400)) {
+        return { status: "refresh_error", reason: "暂存列表刷新请求失败。" };
+      }
+      const signature = textOf(dialog);
+      if (signature !== downloadRefresh.candidate) {
+        downloadRefresh.candidate = signature;
+        downloadRefresh.candidateSince = Date.now();
+        return { status: "loading" };
+      }
+      if (Date.now() - downloadRefresh.candidateSince < 500) return { status: "loading" };
+      downloadRefresh.observer?.disconnect();
+      downloadRefresh = null;
+    }
     const totalMatch = textOf(dialog).match(/共\s*(\d+)\s*条(?:记录)?/);
     const activePage = dialog.querySelector(".el-pagination .number.active");
     const table = downloadTable(dialog);
@@ -410,6 +443,7 @@
         }
         const button = exactButton("下载暂存列表");
         if (!button) return { status: "controls_missing" };
+        beginDownloadRefresh();
         button.click();
         return { status: "clicked" };
       }
@@ -458,7 +492,11 @@
         return parseDownloadTaskList();
       case "closeDownloadList": {
         const dialogs = downloadDialogs();
-        if (dialogs.length === 0) return { status: "already_closed" };
+        if (dialogs.length === 0) {
+          downloadRefresh?.observer?.disconnect();
+          downloadRefresh = null;
+          return { status: "already_closed" };
+        }
         if (dialogs.length !== 1) return { status: "blocked", reason: "下载暂存列表弹窗不唯一，未关闭。" };
         const close = [...dialogs[0].querySelectorAll(".el-dialog__headerbtn")].filter(visible);
         if (close.length !== 1) return { status: "blocked", reason: "下载暂存列表右上角关闭控件缺失或不唯一。" };
@@ -468,6 +506,8 @@
           await component.$nextTick();
           if (component.visible !== false) return { status: "blocked", reason: "点击关闭后，下载暂存列表组件仍保持打开。" };
         }
+        downloadRefresh?.observer?.disconnect();
+        downloadRefresh = null;
         return { status: "closed" };
       }
       case "nextDownloadPage": {
@@ -478,6 +518,7 @@
           .filter(visible)
           .filter((element) => !element.disabled && element.getAttribute("aria-disabled") !== "true" && !element.classList.contains("is-disabled"));
         if (next.length !== 1) return { status: "end" };
+        beginDownloadRefresh();
         next[0].click();
         return { status: "clicked" };
       }
@@ -491,6 +532,7 @@
           .filter(visible)
           .filter((element) => normalize(textOf(element)) === String(args.page));
         if (matches.length !== 1) return { status: "unavailable" };
+        beginDownloadRefresh();
         matches[0].click();
         return { status: "clicked" };
       }
@@ -507,6 +549,9 @@
         const dialog = dialogs.length === 1 ? dialogs[0] : null;
         if (!dialog) return { status: "not_open" };
         const table = downloadTable(dialog);
+        if (downloadRefresh && parseDownloadTaskList().status !== "found") {
+          return { status: "not_ready", reason: "本次暂存列表刷新尚未完成。" };
+        }
         if (!table) return { status: "parse_error", reason: "下载表头无法确认。" };
         const matches = [...(table.element.querySelector(".el-table__body-wrapper")?.querySelectorAll("tbody > tr") || [])]
           .filter(visible)
@@ -533,4 +578,3 @@
     }
   };
 })();
-

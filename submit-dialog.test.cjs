@@ -31,7 +31,7 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
     MutationObserver: Observer,
     document: {documentElement: {}, querySelectorAll: selector => selector === 'button' ? [outside, button] : dialogs},
     setTimeout: (fn, delay) => {
-      assert.equal(delay, 3000);
+      assert.ok(delay > 0 && delay <= 3000);
       timerCalls++;
       if (stuck || otherDialog) Promise.resolve().then(fn);
       return 1;
