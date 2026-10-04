@@ -389,26 +389,45 @@
           if (closeIcons.length === 1) matches = closeIcons;
         }
         if (matches.length !== 1) return { status: "blocked", reason: "提交提示中的关闭按钮缺失或不唯一。" };
-        matches[0].click();
         const waitForNoticeToClose = async (milliseconds) => {
-          const deadline = Date.now() + milliseconds;
-          while (submitMessageVisible() && Date.now() < deadline) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-          }
-          return !submitMessageVisible();
+          if (!submitMessageVisible()) return true;
+          return new Promise((resolve) => {
+            let settled = false;
+            let timer;
+            const finish = (closed) => {
+              if (settled) return;
+              settled = true;
+              observer.disconnect();
+              clearTimeout(timer);
+              resolve(closed);
+            };
+            const observer = new MutationObserver(() => {
+              if (!submitMessageVisible()) finish(true);
+            });
+            observer.observe(document.documentElement, {
+              childList: true,
+              subtree: true,
+              attributes: true,
+              attributeFilter: ["class", "style", "hidden"]
+            });
+            timer = setTimeout(() => finish(!submitMessageVisible()), milliseconds);
+            if (!submitMessageVisible()) finish(true);
+          });
         };
-        if (!await waitForNoticeToClose(2500)) {
+
+        matches[0].click();
+        if (!await waitForNoticeToClose(3000)) {
           const currentModals = visibleModals().filter((dialog) => submitMessagePattern.test(textOf(dialog)));
           const fallbackRoots = [...new Set([...currentModals, ...submitRoots])];
           const fallbackIcons = findCloseIcons(fallbackRoots);
           if (fallbackIcons.length === 1) fallbackIcons[0].click();
-          if (!await waitForNoticeToClose(1500)) {
+          if (!await waitForNoticeToClose(2000)) {
             document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 27, which: 27, bubbles: true }));
-            await waitForNoticeToClose(1500);
+            await waitForNoticeToClose(2000);
           }
         }
         if (submitMessageVisible()) {
-          return { status: "clicked_but_still_visible", reason: "点击关闭按钮和弹窗右上角后提示仍显示。" };
+          return { status: "clicked_but_still_visible", reason: "关闭动作完成后提交提示仍显示，未继续下一步。" };
         }
         return { status: "closed" };
       }
