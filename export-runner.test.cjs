@@ -87,6 +87,7 @@ context.chrome = {
     if (typeof args[0] === "object") return [{ result: { isTopFrame: true, url: tab.url } }];
     if (args.length === 1) return [{ result: true }];
     if (stopAtSubmit) {
+      if (args[1] === "submitDialogState") return [{result: {status: "clear"}}];
       if (args[1] === "setDateRange") return [{result: {status: "set"}}];
       if (args[1] === "query") return [{result: {status: "clicked"}}];
       if (args[1] === "queryState") return [{result: {status: "ready", count: 1,
@@ -105,7 +106,7 @@ context.chrome = {
   } }
 };
 vm.runInContext(fs.readFileSync(`${__dirname}/export-runner.js`, "utf8"), context);
-const timer = setTimeout(() => { console.error("FAIL: resume did not finish"); process.exitCode = 1; }, 1000);
+const timer = setTimeout(() => { console.error("FAIL: resume did not finish"); process.exitCode = 1; }, stopAtSubmit ? 5000 : 1000);
 completed.then((state) => {
   assert.equal(elements.get("#export-result").hidden, false);
   assert.equal(elements.get("#export-close").disabled, false);

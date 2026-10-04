@@ -26,6 +26,14 @@ let state = null;
 let paused = false;
 let stopRequested = false;
 let lastResultStatus = null;
+let pausedAt = null;
+let pausedDuration = 0;
+// Flow waits exclude pauses; adapter requests and server retention keep real deadlines.
+const activeNow = () => (pausedAt ?? Date.now()) - pausedDuration;
+const finishPause = () => {
+  if (pausedAt !== null) pausedDuration += Date.now() - pausedAt;
+  pausedAt = null;
+};
 
 const statusLabels = {
   GATING: "检查登录会话", RUNNING: "运行中", PAUSED: "已暂停",
@@ -206,9 +214,9 @@ const checkpoint = async () => {
 };
 
 const waitForTab = async (predicate, timeoutMs = 25000) => {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = activeNow() + timeoutMs;
   let last = null;
-  while (Date.now() < deadline) {
+  while (activeNow() < deadline) {
     await checkpoint();
     last = await chrome.tabs.get(tabId).catch(() => null);
     if (last && predicate(last)) return last;
@@ -277,8 +285,8 @@ const waitForDownload = async ({ fileName, requestedAt }) => {
   if (!chrome.downloads?.search) throw new Error("下载确认权限不可用，请重新加载扩展并允许 downloads 权限。");
   const escapedStem = fileName.replace(/\.xlsx$/i, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const filenameRegex = `(?:^|[/\\\\])${escapedStem}(?: \\(\\d+\\))?\\.xlsx$`;
-  const deadline = Date.now() + 5 * 60 * 1000;
-  while (Date.now() < deadline) {
+  const deadline = activeNow() + 5 * 60 * 1000;
+  while (activeNow() < deadline) {
     await checkpoint();
     const items = await chrome.downloads.search({ startedAfter: requestedAt, filenameRegex });
     if (items.length > 1) throw new Error(`文件 ${fileName} 对应多个新下载记录，无法唯一确认。`);
@@ -350,9 +358,9 @@ const navigateToReport = async () => {
       return false;
     }
   });
-  const deadline = Date.now() + 30000;
+  const deadline = activeNow() + 30000;
   let inspection;
-  while (Date.now() < deadline) {
+  while (activeNow() < deadline) {
     inspection = await invoke(reportType, "inspect", {});
     if (inspection?.status === "ready" && inspection.hasQuery) return;
     await sleep(400);
@@ -382,13 +390,13 @@ const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMercha
   }
   const opened = await invokeSource("openDownloadList", { gate, targetMerchantNo: merchantNo });
   if (!["clicked", "already_open"].includes(opened?.status)) return { status: "unknown", reason: "无法打开暂存列表核对未知申请。" };
-  const deadline = Date.now() + 10000;
+  const deadline = activeNow() + 10000;
   const matches = new Map();
   let complete = false;
   let duplicateCandidate = false;
   let list;
   const readPage = async (page) => {
-    while (Date.now() < deadline) {
+    while (activeNow() < deadline) {
       await checkpoint();
       list = await invokeSource("parseDownloadTasks");
       if (["found", "empty"].includes(list?.status) && (page === null || Number(list.page) === page)) return true;
@@ -402,7 +410,7 @@ const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMercha
       const selected = await invokeSource("selectDownloadPage", { page: 1 });
       if (!["clicked", "already_current"].includes(selected?.status) || !await readPage(1)) list = null;
     }
-    while (list && Date.now() < deadline) {
+    while (list && activeNow() < deadline) {
       for (const row of list.rows || []) {
         const generatedAt = globalThis.CHINAUMS_DOWNLOAD_RUNNER.timestampFromFileName(row.fileName, reportType, merchantNo);
         const createdAt = parsePortalTimestamp(row.createdAt);
@@ -498,7 +506,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-03-dialog-stable。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-03-pause-query-close。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
@@ -532,6 +540,7 @@ const run = async () => {
       invoke: (operation, args) => invoke(reportType, operation, args),
       gate,
       checkpoint,
+      now: activeNow,
       sleep,
       transition,
       reconcileUnknown,
@@ -565,6 +574,7 @@ const run = async () => {
       submittedMonths,
       gate,
       checkpoint,
+      now: activeNow,
       sleep,
       transition
     });
@@ -579,6 +589,7 @@ const run = async () => {
 };
 
 elements.pause.addEventListener("click", () => {
+  if (!paused) pausedAt = Date.now();
   paused = true;
   elements.pause.disabled = true;
   elements.resume.disabled = false;
@@ -591,6 +602,7 @@ elements.pause.addEventListener("click", () => {
 });
 
 elements.resume.addEventListener("click", () => {
+  finishPause();
   paused = false;
   elements.resume.disabled = true;
   renderState();
@@ -598,6 +610,7 @@ elements.resume.addEventListener("click", () => {
 
 elements.stop.addEventListener("click", () => {
   stopRequested = true;
+  finishPause();
   paused = false;
   elements.stop.disabled = true;
   elements.resume.disabled = true;
