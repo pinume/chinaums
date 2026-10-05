@@ -98,7 +98,7 @@ const submit = () => context.__chinaumsTradeAuditAdapter("submitExport", {
   assert.equal(result.source, "api");
   assert.equal(apiCalls, 1);
   assert.equal(lastCall.endpoint, "uis-tradein-server/portal/yjhx/v3/applyExport");
-  assert.deepEqual(Object.fromEntries(Object.entries(lastCall.payload)), {
+  assert.deepEqual(JSON.parse(JSON.stringify(lastCall.payload)), {
     merOrderId: "",
     transRef: "",
     statusList: [],
