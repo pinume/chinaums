@@ -18,21 +18,21 @@ const rows = [
     exportFilePath:'/apps/data/yjhxexport2026', exportStatus:'02', exportStatusDesc:'成功',
     createTime:'2026-10-05 11:05:38', modifyTime:'2026-10-05 11:11:16', errorMsg:'生成失败'}
 ];
-const component = {
-  $options:{name:'table'},
-  $axiosApi:{axiosPromisePara:async () => {
-    calls++;
-    return {success:true, data:{size:100,current:0,total:241,pages:25,list:rows}};
-  }}
+const fetch = async (url, options) => {
+  calls++;
+  assert.ok(url.endsWith("/qryExportDtls"));
+  assert.equal(options.headers.userPortalToken, "TEST_TOKEN");
+  return { ok: true, status: 200, json: async () => ({
+    success:true, data:{size:100,current:0,total:241,pages:25,list:rows}
+  }) };
 };
-const table = new Element();
-table.__vue__ = {$parent:component};
 const context = vm.createContext({
   Element, AbortController, Date,
   location:{hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},
-  localStorage:{getItem:()=>null},
+  localStorage:{getItem:()=> 'TEST_TOKEN'},
   getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}),
-  document:{querySelectorAll:selector=>selector==='.el-table'?[table]:[]},
+  document:{querySelectorAll:()=>[]},
+  fetch,
   setTimeout, clearTimeout
 });
 vm.runInContext(fs.readFileSync(__dirname + '/trade-audit.js','utf8'), context);
