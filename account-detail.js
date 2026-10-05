@@ -124,6 +124,57 @@
     const matches = [...document.querySelectorAll("#crtt_download_xlsx")].filter(visible);
     return matches.length === 1 && !matches[0].disabled ? matches[0] : null;
   };
+  const exportFieldNames = [
+    "settDateBegin", "settDateEnd", "pageSize", "dealDateBegin", "dealDateEnd", "transStatus",
+    "dealType", "busiTypeIdList", "fdId", "zdCode", "amount1", "amount2", "fkhNo",
+    "bankCardNo1", "bankCardNo2", "dealMode", "bingJieFlag", "refNum", "merOrderId",
+    "bankOrder", "searchNo", "searchObj", "fileExt", "regularFee", "d"
+  ];
+  const buildExportPayload = (control) => {
+    const range = String(queryTracker?.dateValue || "").match(/^(\d{4})\/(\d{2})\/(\d{2})\s~\s(\d{4})\/(\d{2})\/(\d{2})$/);
+    if (!range) return { error: "已确认查询日期格式无法转换为导出参数。" };
+    const expectedBegin = `${range[1]}${range[2]}${range[3]}`;
+    const expectedEnd = `${range[4]}${range[5]}${range[6]}`;
+    const forms = [...document.querySelectorAll("form")].filter((form) =>
+      form.querySelector('[name="settDateBegin"]') && form.querySelector('[name="settDateEnd"]')
+    );
+    const nearest = control?.closest("form");
+    const form = nearest && forms.includes(nearest) ? nearest : forms.length === 1 ? forms[0] : null;
+    if (!form) return { error: `导出查询表单缺失或不唯一（${forms.length}）。` };
+
+    const formData = new FormData(form);
+    const payload = new URLSearchParams();
+    for (const name of exportFieldNames) {
+      if (name === "fileExt") {
+        payload.append(name, "xlsx");
+        continue;
+      }
+      const values = formData.getAll(name);
+      if (!values.length) {
+        payload.append(name, "");
+        continue;
+      }
+      for (const value of values) {
+        if (typeof value !== "string") return { error: `导出字段 ${name} 包含非文本值。` };
+        payload.append(name, value);
+      }
+    }
+    if (payload.get("settDateBegin") !== expectedBegin || payload.get("settDateEnd") !== expectedEnd) {
+      return { error: "导出表单中的清算日期与刚刚确认的查询结果不一致。" };
+    }
+    return { payload };
+  };
+  const classifyExportResponse = (data) => {
+    const code = String(data?.respCode ?? "");
+    const message = clean(data?.respDesc, 500);
+    if (code === "000000" && /对账明细下载成功/.test(message)) {
+      return { status: "accepted", message, source: "api" };
+    }
+    if (code === "999999" && /超过\s*\d+\s*条.*(?:未处理|处理中的导出文件)/.test(message)) {
+      return { status: "throttled", message, source: "api" };
+    }
+    return { status: "unknown", reason: message ? `服务器返回 ${code || "无状态码"}：${message}` : "提交接口返回无法识别。" };
+  };
   const modalSelector = '[role="dialog"],[aria-modal="true"],.layui-layer,.layui-layer-dialog,.layui-layer-content,.modal,.modal-dialog,.el-dialog__wrapper,.el-dialog,.el-message-box__wrapper,.el-message-box,.placeLoad-row,.openAlert';
   const visibleModals = () => [...document.querySelectorAll(modalSelector)].filter(visible);
   const downloadDialogs = () => [...document.querySelectorAll(".loadSave-row")].filter(visible)
@@ -371,8 +422,28 @@
         if (!control || queryTracker?.resultState !== "ready" || !/根据输入条件共查询到/.test(textOf(document.body))) {
           return { status: "blocked", reason: "查询结果未就绪或 XLSX 申请入口不唯一。" };
         }
-        control.click();
-        return { status: "clicked" };
+        const prepared = buildExportPayload(control);
+        if (prepared.error) return { status: "blocked", reason: prepared.error };
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
+        try {
+          const response = await fetch("/uisportal/accountCheckDetailQry/downDeailBill", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+              "X-Requested-With": "XMLHttpRequest"
+            },
+            body: prepared.payload.toString(),
+            signal: controller.signal
+          });
+          if (!response.ok) return { status: "unknown", reason: `提交接口 HTTP ${response.status}。` };
+          return classifyExportResponse(await response.json());
+        } catch (error) {
+          return { status: "unknown", reason: error?.name === "AbortError" ? "提交接口 12 秒内未返回。" : error?.message || "提交接口调用失败。" };
+        } finally {
+          clearTimeout(timer);
+        }
       }
       case "classifySubmit":
         return classifySubmit();
