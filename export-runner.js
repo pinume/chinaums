@@ -553,6 +553,7 @@ const run = async () => {
     .map((month) => ({
       month: month.key,
       remoteFileName: state.months[month.key].remoteFileName || null,
+      remoteTaskId: state.months[month.key].remoteTaskId || null,
       submittedAt: state.months[month.key].submittedAt || state.months[month.key].attemptedAt,
       downloadedFileName: state.months[month.key].downloadStatus === "COMPLETED"
         ? state.months[month.key].downloadedFileName : null
