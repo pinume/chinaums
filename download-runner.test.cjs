@@ -10,12 +10,8 @@ async function checkAccount(mode = "success") {
   const generationStartedAt = now;
   Date.now = () => now;
   let snapshotCalls = 0;
-  let opens = 0;
-  let downloads = 0;
-  let opened = false;
-  let closing = false;
-  let closeReads = 0;
-  let openingReads = mode === "delayed-open" ? 3 : 0;
+  let directRequests = 0;
+  let confirmations = 0;
   let waitedMs = 0;
   let waitingForGeneration = false;
   const events = [];
@@ -47,67 +43,37 @@ async function checkAccount(mode = "success") {
     },
     invoke: async (operation, args = {}) => {
       calls.push(operation);
-      switch (operation) {
-        case "snapshotExportTasks": {
-          snapshotCalls += 1;
-          assert.deepEqual(args.taskIds, ["task-1"]);
-          if (mode === "api-error") return { status: "error", reason: "temporary failure" };
-          if (mode === "mismatch") {
-            return { status: "found", rows: [{ id: "task-1", fileName: `${merchantNo}_MX_20260930120002.xlsx`, taskStatus: "30", statusCode: "ready" }] };
-          }
-          const pending = mode === "stop-wait" ||
-            (mode === "api-wait" && snapshotCalls < 3) ||
-            (mode === "long-generation" && now - generationStartedAt < 180000);
-          return {
-            status: "found",
-            rows: [{ id: "task-1", fileName, taskStatus: pending ? "10" : "30", statusCode: pending ? "pending" : "ready" }]
-          };
+      if (operation === "snapshotExportTasks") {
+        snapshotCalls += 1;
+        assert.deepEqual(args.taskIds, ["task-1"]);
+        if (mode === "api-error") return { status: "error", reason: "temporary failure" };
+        if (mode === "mismatch") {
+          return { status: "found", rows: [{ id: "task-1", fileName: `${merchantNo}_MX_20260930120002.xlsx`, taskStatus: "30", statusCode: "ready" }] };
         }
-        case "openDownloadList":
-          opens += 1;
-          opened = true;
-          return { status: "clicked" };
-        case "setDownloadPageSize":
-          return { status: "unchanged" };
-        case "parseDownloadTasks":
-          if (mode === "never-open") return { status: "not_open" };
-          if (openingReads > 0) {
-            openingReads -= 1;
-            return { status: "not_open" };
-          }
-          if (closing) {
-            if (mode !== "stuck" && ++closeReads >= 2) {
-              opened = false;
-              closing = false;
-              return { status: "not_found" };
-            }
-          }
-          if (!opened) return { status: "not_found" };
-          return {
-            status: "found",
-            page: 1,
-            total: 1,
-            hasNext: false,
-            rows: [{
-              fileName,
-              createdAt: "2026-09-30 12:00:01",
-              statusCode: mode === "ui-not-ready" ? "pending" : "ready",
-              downloadEnabled: mode !== "ui-not-ready"
-            }]
-          };
-        case "downloadTask":
-          downloads += 1;
-          return { status: "download_requested" };
-        case "confirmDownload":
-          return { status: "download_completed", downloadId: downloads };
-        case "closeDownloadList":
-          if (mode === "close") return { status: "blocked" };
-          closing = true;
-          closeReads = 0;
-          return { status: "closed" };
-        default:
-          throw new Error(`Unexpected operation: ${operation}`);
+        const pending = mode === "stop-wait" ||
+          (mode === "api-wait" && snapshotCalls < 3) ||
+          (mode === "long-generation" && now - generationStartedAt < 180000);
+        return {
+          status: "found",
+          rows: [{ id: "task-1", fileName, taskStatus: pending ? "10" : "30", statusCode: pending ? "pending" : "ready" }]
+        };
       }
+      if (operation === "downloadTaskDirect") {
+        directRequests += 1;
+        assert.equal(args.taskId, "task-1");
+        assert.equal(args.fileName, fileName);
+        assert.equal(args.targetMerchantNo, merchantNo);
+        assert.equal(args.gate.allowed, true);
+        if (mode === "direct-blocked") return { status: "blocked", reason: "guard" };
+        return { status: "download_requested" };
+      }
+      if (operation === "confirmDownload") {
+        confirmations += 1;
+        assert.equal(args.fileName, fileName);
+        if (mode === "confirm-fail") return { status: "download_unknown" };
+        return { status: "download_completed", downloadId: 7 };
+      }
+      throw new Error(`Unexpected operation: ${operation}`);
     }
   });
 
@@ -119,49 +85,42 @@ async function checkAccount(mode = "success") {
   if (mode === "api-error") {
     await assert.rejects(result, /对账明细暂存接口连续 3 次读取失败/);
     assert.equal(snapshotCalls, 3);
-    assert.equal(opens, 0);
+    assert.equal(directRequests, 0);
     return;
   }
   if (mode === "mismatch") {
     await assert.rejects(result, /文件名与本轮记录不一致/);
-    assert.equal(opens, 0);
+    assert.equal(directRequests, 0);
     return;
   }
   if (mode === "stop-wait") {
     await assert.rejects(result, /STOPPED_BY_USER/);
     assert.equal(waitedMs, 1000);
-    assert.equal(opens, 0);
+    assert.equal(directRequests, 0);
     return;
   }
-  if (mode === "ui-not-ready") {
-    await assert.rejects(result, /接口已确认本轮对账明细任务全部生成成功/);
-    assert.equal(opens, 1);
-    assert.equal(downloads, 0);
-    assert.equal(calls.filter((item) => item === "openDownloadList").length, 1);
+  if (mode === "direct-blocked") {
+    await assert.rejects(result, /未通过直接下载门禁/);
+    assert.equal(directRequests, 1);
+    assert.equal(confirmations, 0);
     return;
   }
-  if (mode === "close") {
-    await assert.rejects(result, /无法关闭暂存列表/);
-    assert.equal(downloads, 1);
-    return;
-  }
-  if (mode === "stuck") {
-    await assert.rejects(result, /关闭结果无法确认/);
-    assert.equal(downloads, 1);
-    return;
-  }
-  if (mode === "never-open") {
-    await assert.rejects(result, /暂存列表打开后未能读取/);
-    assert.equal(opens, 1);
-    assert.equal(downloads, 0);
+  if (mode === "confirm-fail") {
+    await assert.rejects(result, /下载完成状态无法确认/);
+    assert.equal(directRequests, 1);
+    assert.equal(confirmations, 1);
     return;
   }
 
   const rows = await result;
   assert.equal(rows.length, 1);
   assert.equal(rows[0].fileName, fileName);
-  assert.equal(downloads, 1);
-  assert.equal(opens, 1, "account download list must open only once after API readiness");
+  assert.equal(rows[0].id, "task-1");
+  assert.equal(directRequests, 1);
+  assert.equal(confirmations, 1);
+  assert(!calls.includes("openDownloadList"));
+  assert(!calls.includes("parseDownloadTasks"));
+  assert(!calls.includes("closeDownloadList"));
   if (mode === "api-wait") {
     assert.equal(snapshotCalls, 3);
     assert.deepEqual(events.filter((event) => event.status === "WAITING_GENERATION")
@@ -217,8 +176,8 @@ async function checkTradeCloseRetry() {
 }
 
 (async () => {
-  for (const mode of ["success", "api-wait", "api-error", "mismatch", "ui-not-ready", "close",
-    "stuck", "delayed-open", "never-open", "stop-wait", "long-generation", "missing-id"]) {
+  for (const mode of ["success", "api-wait", "api-error", "mismatch", "direct-blocked",
+    "confirm-fail", "stop-wait", "long-generation", "missing-id"]) {
     await checkAccount(mode);
   }
   let calls = 0;
@@ -229,6 +188,6 @@ async function checkTradeCloseRetry() {
   }), /同一远端文件名/);
   assert.equal(calls, 0);
   await checkTradeCloseRetry();
-  console.log("PASS: account generation uses exact task API polling, opens the list once, and keeps final UI/download guards");
+  console.log("PASS: account generation uses exact API task identity, downloads directly by task ID, and keeps Chrome completion confirmation");
 })().catch((error) => { console.error(error); process.exitCode = 1; })
   .finally(() => { Date.now = originalDateNow; });
