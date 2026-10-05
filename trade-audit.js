@@ -319,7 +319,6 @@
         if (Date.now() - queryTracker.candidateSince < 500) return { status: "waiting" };
         const count = resultCount();
         const exportButton = exactButton("批量导出");
-        const listButton = exactButton("下载暂存列表");
         const currentResult = JSON.parse(signature);
         const noDataText = [...document.querySelectorAll(".el-table__empty-text,.el-empty__description")]
           .filter(visible)
@@ -329,7 +328,7 @@
           finishQueryObservation();
           return { status: "no_data", count: count ?? 0 };
         }
-        if (count !== null && currentResult.rows.length > 0 && exportButton && listButton) {
+        if (count !== null && currentResult.rows.length > 0 && exportButton) {
           const merchants = queryMerchantIds();
           if (merchants.length !== 1 || (args.targetMerchantId && merchants[0] !== args.targetMerchantId)) {
             finishQueryObservation();
@@ -349,7 +348,7 @@
           return { status: "blocked", reason: "商户门禁未通过，不允许申请导出。" };
         }
         if (queryTracker?.resultState !== "ready" || resultCount() === null ||
-          !exactButton("批量导出") || !exactButton("下载暂存列表")) {
+          !exactButton("批量导出")) {
           return { status: "blocked", reason: "查询结果未就绪，导出操作已锁定。" };
         }
         const merchants = queryMerchantIds();
