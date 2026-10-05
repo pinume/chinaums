@@ -366,7 +366,7 @@ const navigateToReport = async () => {
   let inspection;
   while (activeNow() < deadline) {
     inspection = await invoke(reportType, "inspect", {});
-    if (reportType === "account-detail" && inspection?.downloadListOpen === true) {
+    if (inspection?.downloadListOpen === true) {
       const closed = await invoke(reportType, "closeDownloadList", {});
       if (closed?.status !== "closed") {
         throw new Error("检测到原先打开的下载暂存列表，但无法安全关闭；尚未开始本轮查询。");
@@ -518,7 +518,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-05-trade-direct-download。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-05-trade-startup-inspect。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
@@ -540,13 +540,6 @@ const run = async () => {
 
   await navigateToReport();
   if (await closeExistingSubmitNotice()) appendLog("已关闭上次遗留的申请提示，开始本轮月份查询。");
-  if (reportType === "trade-audit") {
-    const preexistingList = await invoke(reportType, "closeDownloadList", {});
-    if (!new Set(["closed", "already_closed"]).has(preexistingList?.status)) {
-      throw new Error("当前下载暂存列表状态无法自动关闭；尚未开始本轮查询。");
-    }
-    if (preexistingList.status === "closed") appendLog("已关闭原先打开的下载暂存列表，准备继续月度查询。");
-  }
   if (months.length) {
     await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
       months,
