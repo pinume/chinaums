@@ -21,12 +21,14 @@
   const hasDownloadList = () => downloadDialogs().length === 1;
   const downloadGateAllowed = (args) => args.gate?.allowed === true &&
     normalize(args.gate.merchantNo) === normalize(args.targetMerchantNo) && Boolean(args.targetMerchantNo);
-  const QUERY_FIELDS = [
-    "settDateBegin", "settDateEnd", "pageSize", "dealDateBegin", "dealDateEnd", "transStatus",
-    "dealType", "busiTypeIdList", "fdId", "zdCode", "amount1", "amount2", "fkhNo",
-    "bankCardNo1", "bankCardNo2", "dealMode", "bingJieFlag", "refNum", "merOrderId",
-    "bankOrder", "searchNo", "searchObj"
+  const QUERY_DEFAULTS = [
+    ["settDateBegin", ""], ["settDateEnd", ""], ["pageSize", "5"], ["dealDateBegin", ""],
+    ["dealDateEnd", ""], ["transStatus", "1"], ["dealType", ""], ["busiTypeIdList", ""],
+    ["fdId", ""], ["zdCode", ""], ["amount1", ""], ["amount2", ""], ["fkhNo", ""],
+    ["bankCardNo1", ""], ["bankCardNo2", ""], ["dealMode", ""], ["bingJieFlag", ""],
+    ["refNum", ""], ["merOrderId", ""], ["bankOrder", ""], ["searchNo", ""], ["searchObj", "1"]
   ];
+  const baseQueryParams = () => new URLSearchParams(QUERY_DEFAULTS);
   const compactDate = (value) => {
     const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!match) return null;
@@ -37,41 +39,15 @@
     if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
     return `${match[1]}${match[2]}${match[3]}`;
   };
-  const accountForm = () => {
-    const forms = [...document.querySelectorAll("form")].filter((form) =>
-      form.querySelector('[name="settDateBegin"]') && form.querySelector('[name="settDateEnd"]')
-    );
-    return forms.length === 1 ? forms[0] : null;
-  };
-  const formParams = (form, allowed = null) => {
-    const params = new URLSearchParams();
-    for (const [name, value] of new FormData(form)) {
-      if (typeof value !== "string") throw new Error(`字段 ${name} 包含非文本值。`);
-      if (!allowed || allowed.has(name)) params.append(name, value);
-    }
-    return params;
-  };
   const buildQueryPayload = (pageNumber) => {
     if (!queryTracker?.beginSettDate || !queryTracker?.endSettDate) {
       return { error: "查询日期尚未安全设置。" };
     }
-    const form = accountForm();
-    if (!form) return { error: "对账明细查询表单缺失或不唯一。" };
-    let payload;
-    try {
-      payload = formParams(form, new Set(QUERY_FIELDS));
-    } catch (error) {
-      return { error: error.message };
-    }
-    for (const name of QUERY_FIELDS) {
-      if (!payload.has(name)) payload.set(name, "");
-    }
+    const payload = baseQueryParams();
     payload.set("settDateBegin", queryTracker.beginSettDate);
     payload.set("settDateEnd", queryTracker.endSettDate);
     payload.set("pageNumber", String(pageNumber));
-    const pageSize = Number(payload.get("pageSize"));
-    if (!Number.isInteger(pageSize) || pageSize <= 0) return { error: "查询表单中的 pageSize 无效。" };
-    return { payload, pageSize };
+    return { payload, pageSize: 5 };
   };
   const querySignature = (payload) => {
     const copy = new URLSearchParams(payload);
@@ -159,17 +135,12 @@
     if (!queryTracker?.beginSettDate || !queryTracker?.endSettDate) {
       return { error: "已确认查询日期缺失。" };
     }
-    const form = accountForm();
-    if (!form) return { error: "导出查询表单缺失或不唯一。" };
-    let payload;
-    try {
-      payload = formParams(form);
-    } catch (error) {
-      return { error: error.message };
-    }
+    const payload = baseQueryParams();
     payload.set("settDateBegin", queryTracker.beginSettDate);
     payload.set("settDateEnd", queryTracker.endSettDate);
     payload.set("fileExt", "xlsx");
+    payload.set("regularFee", "");
+    payload.set("d", "");
     return { payload };
   };
   const classifyExportResponse = (data) => {
@@ -222,13 +193,15 @@
     switch (operation) {
       case "submitDialogState":
         return { status: visibleModals().filter((dialog) => textOf(dialog)).length === 0 ? "clear" : "visible" };
-      case "inspect":
+      case "inspect": {
+        const apiReady = typeof fetch === "function";
         return {
-          status: accountForm() ? "ready" : "controls_missing",
-          reason: accountForm() ? null : "对账明细查询表单缺失或不唯一。",
-          hasQuery: Boolean(accountForm()),
+          status: apiReady ? "ready" : "controls_missing",
+          reason: apiReady ? null : "对账明细查询接口不可用。",
+          hasQuery: apiReady,
           downloadListOpen: hasDownloadList()
         };
+      }
       case "setDateRange": {
         const beginSettDate = compactDate(args.start);
         const endSettDate = compactDate(args.end);
