@@ -7,6 +7,7 @@ const checks = [
   ...files.filter(name => name.endsWith('.test.cjs')).map(name => [path.join(__dirname, name)]),
   [path.join(__dirname, 'export-runner.test.cjs'), 'COMPLETED'],
   [path.join(__dirname, 'export-runner.test.cjs'), 'BLOCKED', 'LIST_OPEN'],
+  [path.join(__dirname, 'export-runner.test.cjs'), 'BLOCKED', 'LIST_OPEN', 'trade-audit'],
   [path.join(__dirname, 'export-runner.test.cjs'), 'WAITING_GENERATION'],
   [path.join(__dirname, 'export-runner.test.cjs'), 'BLOCKED', 'trade-audit'],
   [path.join(__dirname, 'trade-download.test.cjs'), 'mixed'],
