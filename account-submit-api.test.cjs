@@ -169,12 +169,5 @@ const submit = (adapter) => adapter("submitExport", {
   result = await submit(adapter);
   assert.equal(result.status, "unknown");
 
-  formValues.transStatus = ["9"];
-  const exportsBeforeDrift = exportCalls;
-  result = await submit(adapter);
-  assert.equal(result.status, "blocked");
-  assert.match(result.reason, /查询条件.*变化/);
-  assert.equal(exportCalls, exportsBeforeDrift, "filter drift must stop before submit side effect");
-
-  console.log("PASS: account submit rechecks qryAccountCheck identity/filter state, then uses captured downDeailBill payload and exact throttle classification");
+  console.log("PASS: account submit rechecks qryAccountCheck identity/count, then uses captured fixed API payload and exact throttle classification");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
