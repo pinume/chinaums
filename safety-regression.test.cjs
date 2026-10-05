@@ -133,32 +133,22 @@ async function monthly(mode) {
   assert.equal(reconciles, ['submit-timeout', 'response-timeout', 'reconcile-error', 'stop-reconcile'].includes(mode) ? 1 : 0);
 }
 
-async function incompleteDownloads(mode) {
-  let downloads = 0;
+async function retentionStopsBeforeDownload() {
+  let calls = 0;
   await assert.rejects(context.CHINAUMS_DOWNLOAD_RUNNER.run({
     reportType: 'trade-audit', merchantNo, gate: {allowed: true, merchantNo},
     startedAt: new Clock(now - 6 * 24 * 60 * 60 * 1000).toISOString(),
     submittedMonths: [{month: month.key, remoteFileName: fileName, remoteTaskId: 'task-1', submittedAt: new Clock().toISOString()}],
     checkpoint: async () => {}, sleep: async ms => {now += ms;}, transition: async () => {},
-    invoke: async operation => {
-      if (operation === 'snapshotExportTasks') return {status:'found', rows:[{id:'task-1', fileName, statusCode:'ready', exportStatus:'02', exportStatusDesc:'成功'}]};
-      if (operation === 'openDownloadList') return {status: 'clicked'};
-      if (operation === 'parseDownloadTasks') return {status: 'found', page: 1, hasNext: mode === 'unknown-pagination' ? undefined : true,
-        rows: [{fileName, createdAt: '2026-09-30 12:00:01', statusCode: 'ready', downloadEnabled: true}]};
-      if (operation === 'nextDownloadPage') return {status: mode === 'stale-page' ? 'clicked' : 'blocked'};
-      if (operation === 'downloadTask') {downloads++; return {status: 'download_requested'};}
-      if (operation === 'confirmDownload') return {status: 'download_completed'};
-      if (operation === 'closeDownloadList') return {status: 'already_closed'};
-      throw new Error(operation);
-    }
+    invoke: async () => { calls++; throw new Error('retention guard must stop before remote reads or downloads'); }
   }), /暂存文件保留期限/);
-  assert.equal(downloads, 0, 'an incomplete scan must not download even when all expected files appear on the first page');
+  assert.equal(calls, 0);
 }
 
 (async () => {
   for (const mode of ['accepted', 'multiple', 'merchant-mismatch', 'bad-id', 'old-task', 'no-new', 'read-error', 'duplicate-baseline']) await reconcile(mode);
   for (const mode of ['normal', 'submit-timeout', 'response-timeout', 'reconcile-error', 'switch', 'missing-merchant', 'blocked', 'stop-query', 'stop-submit', 'stop-response', 'stop-reconcile']) await monthly(mode);
-  for (const mode of ['blocked-page', 'stale-page', 'unknown-pagination']) await incompleteDownloads(mode);
+  await retentionStopsBeforeDownload();
   for (const names of [[fileName, null], [fileName, fileName]]) {
     let calls = 0;
     const submittedMonths = names.map(remoteFileName => ({remoteFileName}));
@@ -173,5 +163,5 @@ async function incompleteDownloads(mode) {
   assert.throws(() => vm.runInContext(guard, context), /当前仅适配 2026/);
   context.reportType = 'account-detail';
   vm.runInContext(guard, context);
-  console.log('PASS: exact task identity, complete pagination, user cancellation, submission timeouts, merchant lock and 2026 gate');
+  console.log('PASS: exact task identity, UNKNOWN safety, retention guard, user cancellation, merchant lock and 2026 gate');
 })().catch(error => { console.error(error); process.exitCode = 1; });
