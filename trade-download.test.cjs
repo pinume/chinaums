@@ -1,28 +1,145 @@
-const assert = require('node:assert/strict');
-require('./download-runner.js');
-const tasks = Array.from({length:12},(_,i)=>({fileName:`MER_89813014812B1L3_202609301813${String(i).padStart(2,'0')}_yjhx.xlsx`,createdAt:`2026-09-30 18:13:${String(i).padStart(2,'0')}`,statusCode:'ready',downloadEnabled:true}));
-const originalNow = Date.now;
-let now = new Date(2026,8,30,18,13,0).getTime();
-Date.now=()=>now;
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+require("./download-runner.js");
+
+const merchantNo = "89813014812B1L3";
+const tasks = Array.from({ length: 12 }, (_, index) => ({
+  id: String(index + 1).padStart(32, "0"),
+  fileName: `MER_${merchantNo}_202609301813${String(index).padStart(2, "0")}_yjhx.xlsx`,
+  statusCode: "ready",
+  exportStatus: "02",
+  exportStatusDesc: "成功"
+}));
 const mixed = process.argv.includes("mixed");
-if (mixed) tasks[1].fileName = tasks[1].fileName.replace("B1L3", "B06R");
-let page = 1, opened = false, nextCalls = 0, dataPage = 1, pendingReads = 0, delayedTimer = false;
-const clicked = [], completed = [], delays = [];
-(async()=>{
-  await CHINAUMS_DOWNLOAD_RUNNER.run({reportType:'trade-audit',merchantNo:'',onMerchantIdentified:async value=>assert.equal(value,'89813014812B1L3'),startedAt:new Date(2026,8,30,18,13,0,500).toISOString(),submittedMonths:tasks.map((t,i)=>({month:`2026-${String(i+1).padStart(2,'0')}`,submittedAt:new Date(2026,8,30,18,13,i,500).toISOString(),remoteFileName:t.fileName,remoteTaskId:`task-${i+1}`})),gate:{allowed:true,merchantNo:'89813014812B1L3'},checkpoint:async()=>{},sleep:async ms=>{delays.push(ms);now+=ms;if(ms===200 && !delayedTimer){now+=20000;delayedTimer=true;}},transition:async event=>{if(event.status==='DOWNLOAD_COMPLETED')completed.push(event.month);},invoke:async(op,args)=>{
-    if(op==='snapshotExportTasks'){
-      assert.equal(args.taskIds.length,12);
-      return {status:'found',rows:tasks.map((t,i)=>({id:`task-${i+1}`,fileName:t.fileName,statusCode:'ready',exportStatus:'02',exportStatusDesc:'成功'}))};
+if (mixed) tasks[1].fileName = tasks[1].fileName.replace(merchantNo, "89813014812B06R");
+
+async function checkRunner() {
+  const requested = [];
+  const completed = [];
+  const calls = [];
+  const result = globalThis.CHINAUMS_DOWNLOAD_RUNNER.run({
+    reportType: "trade-audit",
+    merchantNo: "",
+    onMerchantIdentified: async (value) => assert.equal(value, merchantNo),
+    startedAt: new Date(2026, 8, 30, 18, 13, 0, 500).toISOString(),
+    submittedMonths: tasks.map((task, index) => ({
+      month: `2026-${String(index + 1).padStart(2, "0")}`,
+      submittedAt: new Date(2026, 8, 30, 18, 13, index, 500).toISOString(),
+      remoteFileName: task.fileName,
+      remoteTaskId: task.id
+    })),
+    gate: { allowed: true, merchantNo },
+    checkpoint: async () => {},
+    sleep: async () => {},
+    transition: async (event) => {
+      if (event.status === "DOWNLOAD_COMPLETED") completed.push(event.fileName);
+    },
+    invoke: async (operation, args = {}) => {
+      calls.push(operation);
+      if (operation === "snapshotExportTasks") {
+        assert.equal(args.taskIds.length, 12);
+        return { status: "found", rows: tasks };
+      }
+      if (operation === "downloadTaskDirect") {
+        assert.equal(completed.length, requested.length, "downloads must be confirmed sequentially");
+        const task = tasks[requested.length];
+        assert.equal(args.taskId, task.id);
+        assert.equal(args.fileName, task.fileName);
+        assert.equal(args.targetMerchantNo, merchantNo);
+        requested.push(args.fileName);
+        return { status: "download_requested" };
+      }
+      if (operation === "confirmDownload") {
+        assert.equal(args.fileName, requested.at(-1));
+        return { status: "download_completed", downloadId: requested.length };
+      }
+      throw new Error(`Unexpected operation: ${operation}`);
     }
-    if(op==='openDownloadList'){opened=true;return{status:'clicked'};}
-    if(op==='parseDownloadTasks'){if(pendingReads && --pendingReads===0)dataPage=page;return{status:opened?'found':'not_open',page,total:12,hasNext:page===1,rows:tasks.slice().reverse().slice((dataPage-1)*10,dataPage*10)};}
-    if(op==='nextDownloadPage'){page++;nextCalls++;pendingReads=nextCalls===1?2:30;return{status:'clicked'};}
-    if(op==='selectDownloadPage'){page=args.page;pendingReads=30;return{status:'clicked'};}
-    if(op==='downloadTask'){assert.equal(dataPage,page,'target rows must finish loading before download');assert.equal(completed.length,clicked.length);clicked.push(args.fileName);return{status:'download_requested'};}
-    if(op==='confirmDownload')return{status:'download_completed',downloadId:clicked.length};
-    if(op==='closeDownloadList'){opened=false;return{status:'closed'};}
-    throw new Error(op);
-  }});
-  assert.equal(nextCalls,1);assert.equal(clicked.length,12);assert.equal(new Set(clicked).size,12);assert.deepEqual(clicked,tasks.map(t=>t.fileName));assert.equal(completed[0],'2026-01');assert.equal(completed[11],'2026-12');assert.equal(delays.filter(ms=>ms>=1000).length,0,'ready files must not incur a fixed pacing delay');assert.equal(opened,false);
-  console.log('PASS: trade 12 exact task files across two pages with delayed row updates, second precision, sequential completion without fixed gaps');
-})().catch(e=>{if (mixed) {assert.match(e.message,/多个商户/);assert.equal(clicked.length,0);console.log("PASS: mixed merchant tasks stop before any download");} else {console.error(e);process.exitCode=1;}}).finally(()=>{Date.now=originalNow;});
+  });
+
+  if (mixed) {
+    await assert.rejects(result, /多个商户/);
+    assert.equal(requested.length, 0);
+    return;
+  }
+  const rows = await result;
+  assert.equal(rows.length, 12);
+  assert.deepEqual(requested, tasks.map((task) => task.fileName));
+  assert.deepEqual(completed, requested);
+  for (const operation of ["openDownloadList", "parseDownloadTasks", "downloadTask", "closeDownloadList"]) {
+    assert(!calls.includes(operation), `trade direct download must not call ${operation}`);
+  }
+}
+
+async function checkAdapter() {
+  class Element {
+    constructor() { this.attrs = {}; this.removed = false; }
+    getClientRects() { return [1]; }
+    closest() { return null; }
+    setAttribute(name, value) { this.attrs[name] = value; }
+    remove() { this.removed = true; }
+  }
+  const appended = [];
+  const body = new Element();
+  body.append = (node) => appended.push(node);
+  let token = "TEST_TOKEN";
+  const context = vm.createContext({
+    Element,
+    Date,
+    AbortController,
+    encodeURIComponent,
+    location: { hostname: "service.chinaums.com", pathname: "/uisportalfront/", hash: "#/auditOfTrade2026" },
+    localStorage: { getItem: () => token },
+    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+    document: {
+      body,
+      documentElement: new Element(),
+      querySelectorAll: () => [],
+      createElement: (tag) => {
+        assert.equal(tag, "iframe");
+        return new Element();
+      }
+    },
+    setTimeout: (fn, ms) => {
+      assert.equal(ms, 60000);
+      fn();
+      return 1;
+    },
+    clearTimeout: () => {}
+  });
+  vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, "utf8"), context);
+  const adapter = context.__chinaumsTradeAuditAdapter;
+  const args = {
+    gate: { allowed: true, merchantNo },
+    targetMerchantNo: merchantNo,
+    taskId: "20261005133941681550426941423616",
+    fileName: `MER_${merchantNo}_20261005133941_yjhx.xlsx`
+  };
+
+  let response = await adapter("downloadTaskDirect", args);
+  assert.equal(response.status, "download_requested");
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].src,
+    "/uisportal/api/uis-tradein-server/portal/yjhx/v3/downloadExportFile/20261005133941681550426941423616?userPortalToken=TEST_TOKEN");
+  assert.equal(appended[0].hidden, true);
+  assert.equal(appended[0].attrs["aria-hidden"], "true");
+  assert.equal(appended[0].removed, true);
+
+  response = await adapter("downloadTaskDirect", { ...args, taskId: "bad-id" });
+  assert.equal(response.status, "blocked");
+  response = await adapter("downloadTaskDirect", { ...args, fileName: "MER_OTHER_20261005133941_yjhx.xlsx" });
+  assert.equal(response.status, "blocked");
+  token = "";
+  response = await adapter("downloadTaskDirect", args);
+  assert.equal(response.status, "blocked");
+  assert.equal(appended.length, 1, "failed guards must not start another download request");
+}
+
+(async () => {
+  await checkRunner();
+  if (!mixed) await checkAdapter();
+  console.log(mixed
+    ? "PASS: mixed trade merchants stop before any direct download"
+    : "PASS: trade downloads exact task IDs directly, sequentially confirms Chrome completion, and uses the captured endpoint");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
