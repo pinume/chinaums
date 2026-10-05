@@ -153,6 +153,7 @@
       if (pageNumber >= currentPages) break;
     }
     if (rows.length !== totalElements ||
+      new Set(rows.map((row) => JSON.stringify(row))).size !== rows.length ||
       rows.some((row) => !row?.mer_no || !/^\d{8}$/.test(String(row.sett_date || ""))) ||
       rows.some((row) => String(row.sett_date) < queryTracker.beginSettDate ||
         String(row.sett_date) > queryTracker.endSettDate)) {
