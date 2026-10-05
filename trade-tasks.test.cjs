@@ -14,6 +14,7 @@ let clicked = 0, ready = false, hidden = false, opening = 0, loading = false;
 let now = new Date(2026,8,30,18,13,40).getTime();
 let refreshAt = now;
 let resourceAvailable = true, resourceStatus = 200;
+let autoCloseComponent = null;
 const steps = [];
 const clock = class extends Date { static now() { return now; } };
 const fileName = 'MER_89813014812B1L3_20260930181340_yjhx.xlsx';
@@ -37,7 +38,19 @@ const close = new Element('×'); close.click = () => { steps.push('close'); clos
 const oldDialogQuery = dialog.querySelectorAll;
 dialog.querySelectorAll = selector => selector === '.el-dialog__headerbtn' ? [close] : oldDialogQuery(selector);
 
-const context = vm.createContext({Element, Date:clock, performance:{now:()=>now,getEntriesByType:()=>resourceAvailable ? [{name:"https://service.chinaums.com/qryExportDtls",startTime:refreshAt,responseEnd:refreshAt+1,responseStatus:resourceStatus}] : []}, getComputedStyle: element => ({display:'block',visibility:'visible',opacity:element === wrapper && hidden ? '0' : '1'}), location:{hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},document:{body:new Element('根据查询条件共查询到 1 条记录'),querySelectorAll:s => {
+class Observer {
+  constructor(callback) { this.callback = callback; }
+  observe() {
+    if (autoCloseComponent) Promise.resolve().then(() => {
+      autoCloseComponent.visible = false;
+      this.callback();
+    });
+  }
+  disconnect() {}
+}
+const context = vm.createContext({Element, Date:clock, MutationObserver:Observer,
+  setTimeout: fn => { Promise.resolve().then(fn); return 1; }, clearTimeout:()=>{},
+  performance:{now:()=>now,getEntriesByType:()=>resourceAvailable ? [{name:"https://service.chinaums.com/qryExportDtls",startTime:refreshAt,responseEnd:refreshAt+1,responseStatus:resourceStatus}] : []}, getComputedStyle: element => ({display:'block',visibility:'visible',opacity:element === wrapper && hidden ? '0' : '1'}), location:{hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},document:{documentElement:{},body:new Element('根据查询条件共查询到 1 条记录'),querySelectorAll:s => {
   if (s === '.el-dialog') { if (opening > 0) { opening--; return []; } return [dialog]; }
   if (s === 'input.deal-date') return [input];
   if (s === 'button') return [query, launch, new Element('批量导出')];
@@ -49,6 +62,9 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
 (async () => {
   const adapter = context.__chinaumsTradeAuditAdapter;
   let parsed = await adapter('parseDownloadTasks'); assert.equal(parsed.status,'found'); assert.equal(parsed.rows[0].statusCode,'pending'); assert.equal(parsed.rows[0].downloadEnabled,false);
+  loading = true;
+  assert.equal((await adapter('parseDownloadTasks')).status,'found','page-level loading outside the download dialog must not mask a readable list');
+  loading = false;
   failed = true;
   parsed = await adapter('parseDownloadTasks');
   assert.equal(parsed.rows[0].statusCode,'failed');
@@ -110,6 +126,11 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   await adapter('parseDownloadTasks'); now+=500;
   assert.equal((await adapter('parseDownloadTasks')).status,'found');
   const originalClose = close.click;
+  autoCloseComponent = component;
+  close.click = () => { originalClose(); hidden = false; };
+  assert.equal((await adapter('closeDownloadList')).status,'closed','component close may complete after the click returns');
+  autoCloseComponent = null;
+  component.visible = true;
   close.click = () => {component.visible = false; originalClose(); hidden = false;};
   assert.equal((await adapter('closeDownloadList')).status,'closed');
   assert.equal((await adapter('parseDownloadTasks')).status,'not_open');
