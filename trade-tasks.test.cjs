@@ -32,7 +32,7 @@ const dialog = new Element('共 146 条'); dialog.querySelectorAll = s => s === 
 const wrapper = new Element(); dialog.parentElement = wrapper;
 const input = new Element(); input.value = '2026/09/01 ~ 2026/09/30';
 const query = new Element('查询'); query.click = () => { throw new Error('下载状态刷新不应重新查询交易'); };
-const launch = new Element('下载暂存列表'); launch.click = () => { refreshAt = now; steps.push('open'); hidden = false; opening = 2; if(closeClicks > 1) ready = true; };
+const launch = new Element('下载暂存列表'); launch.focus = () => {}; launch.click = () => { refreshAt = now; steps.push('open'); hidden = false; opening = 2; if(closeClicks > 1) ready = true; };
 let closeClicks = 0;
 const close = new Element('×'); close.click = () => { steps.push('close'); closeClicks++; if(closeClicks > 1) hidden = true; };
 const oldDialogQuery = dialog.querySelectorAll;
