@@ -25,6 +25,7 @@ async function checkAccount(mode = "success") {
       month: "2026-09",
       remoteFileName: fileName,
       remoteTaskId: mode === "missing-id" ? null : "task-1",
+      downloadedFileName: mode === "resume" ? fileName : null,
       submittedAt: "2026-09-30T04:00:00.000Z"
     }],
     gate: { allowed: true, merchantNo },
@@ -116,8 +117,8 @@ async function checkAccount(mode = "success") {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].fileName, fileName);
   assert.equal(rows[0].id, "task-1");
-  assert.equal(directRequests, 1);
-  assert.equal(confirmations, 1);
+  assert.equal(directRequests, mode === "resume" ? 0 : 1);
+  assert.equal(confirmations, mode === "resume" ? 0 : 1);
   assert(!calls.includes("openDownloadList"));
   assert(!calls.includes("parseDownloadTasks"));
   assert(!calls.includes("closeDownloadList"));
@@ -176,7 +177,7 @@ async function checkTradeCloseRetry() {
 }
 
 (async () => {
-  for (const mode of ["success", "api-wait", "api-error", "mismatch", "direct-blocked",
+  for (const mode of ["success", "resume", "api-wait", "api-error", "mismatch", "direct-blocked",
     "confirm-fail", "stop-wait", "long-generation", "missing-id"]) {
     await checkAccount(mode);
   }
