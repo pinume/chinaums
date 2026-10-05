@@ -103,6 +103,7 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
 
 (async () => {
   const adapter = context.__chinaumsAccountDetailAdapter;
+  assert.equal((await adapter("inspect")).downloadListOpen, false);
   const snapshot = await adapter("snapshotExportTasks", { taskIds: ["remote-1", "remote-2"] });
   assert.equal(snapshotCalls, 1, "target task IDs on the first page must stop historical pagination");
   assert.deepEqual(Array.from(snapshot.rows, (row) => row.statusCode), ["pending", "ready"]);
@@ -115,6 +116,7 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
   };
   resourceEntries[0].startTime = -1;
   await invoke("openDownloadList");
+  assert.equal((await adapter("inspect")).downloadListOpen, true);
   assert.equal((await adapter("parseDownloadTasks")).status, "loading", "old request cannot validate retained rows");
   resourceEntries[0].startTime = 1;
   assert.equal((await adapter("parseDownloadTasks")).status, "loading", "fresh response still waits for stable content");
