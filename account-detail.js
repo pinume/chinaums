@@ -225,7 +225,6 @@
             resultState: "failed",
             count: null,
             merchantNo: null,
-            filterSignature: null,
             reason: error?.name === "AbortError" ? "对账明细查询接口在截止时间前未完成。" :
               error?.message || "对账明细查询接口调用失败。"
           });
