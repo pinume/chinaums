@@ -396,8 +396,9 @@ const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMercha
   if (!merchantNo || !Number.isFinite(attemptedAtMs)) return { status: "unknown", reason: "缺少申请时间或已确认商户号，无法安全核对。" };
   const invokeSource = (operation, args = {}) => invoke(reportType, operation, args, sourceTabId);
 
-  if (reportType === "account-detail") {
-    const previousIds = new Set((Array.isArray(baselineRows) ? baselineRows : []).map((row) => String(row?.id || "")).filter(Boolean));
+  if (["account-detail", "trade-audit"].includes(reportType)) {
+    const previousIds = new Set((Array.isArray(baselineRows) ? baselineRows : [])
+      .map((row) => String(row?.id || "")).filter(Boolean));
     if (previousIds.size !== baselineRows.length) {
       return { status: "unknown", reason: "申请前暂存任务基线缺失或身份重复，不能安全核对。" };
     }
@@ -421,12 +422,16 @@ const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMercha
         if (added.length === 1) {
           const row = added[0];
           const createdAtMs = parsePortalTimestamp(row.createdAt);
-          const fileMatch = String(row.fileName || "").match(/^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
+          const accountMatch = String(row.fileName || "").match(/^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
+          const tradeMatch = String(row.fileName || "").match(/^MER_([A-Z0-9]+)_\d{14}_yjhx\.xlsx$/i);
+          const fileMatch = reportType === "trade-audit" ? tradeMatch : accountMatch;
+          const idValid = reportType === "trade-audit"
+            ? /^\d{32}$/.test(String(row.id || ""))
+            : /^[0-9a-f]{32}$/i.test(String(row.id || ""));
           const alreadyBound = Object.values(state?.months || {}).some((month) =>
             month.remoteTaskId === row.id || month.remoteFileName === row.fileName
           );
-          if (!/^[0-9a-f]{32}$/i.test(String(row.id || "")) ||
-            !fileMatch || normalize(fileMatch[1]) !== merchantNo || !Number.isFinite(createdAtMs) ||
+          if (!idValid || !fileMatch || normalize(fileMatch[1]) !== merchantNo || !Number.isFinite(createdAtMs) ||
             createdAtMs < attemptedAtMs - 2000 || createdAtMs > Date.now() + 2000 || alreadyBound) {
             return { status: "unknown", reason: "唯一新增暂存任务的商户、时间或身份校验未通过；不自动重提。" };
           }
@@ -445,62 +450,6 @@ const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMercha
     }
     return { status: "unknown", reason: "15秒内未找到唯一新增暂存任务；不自动重提。" };
   }
-  const notice = await invokeSource("classifySubmit");
-  const expectedFileName = notice?.status === "accepted" ? notice.fileName : null;
-  if (["accepted", "throttled", "failed"].includes(notice?.status)) {
-    const closed = await invokeSource("closeSubmitDialog");
-    if (closed?.status !== "closed") return { status: "unknown", reason: "提交提示未能安全关闭，无法核对。" };
-  }
-  const opened = await invokeSource("openDownloadList", { gate, targetMerchantNo: merchantNo });
-  if (!["clicked", "already_open"].includes(opened?.status)) return { status: "unknown", reason: "无法打开暂存列表核对未知申请。" };
-  const deadline = activeNow() + 10000;
-  const matches = new Map();
-  let complete = false;
-  let duplicateCandidate = false;
-  let list;
-  const readPage = async (page) => {
-    while (activeNow() < deadline) {
-      await checkpoint();
-      list = await invokeSource("parseDownloadTasks");
-      if (["found", "empty"].includes(list?.status) && (page === null || Number(list.page) === page)) return true;
-      if (list?.status === "parse_error") return false;
-      await sleep(200);
-    }
-    return false;
-  };
-  if (await readPage(null)) {
-    if (Number(list.page) !== 1) {
-      const selected = await invokeSource("selectDownloadPage", { page: 1 });
-      if (!["clicked", "already_current"].includes(selected?.status) || !await readPage(1)) list = null;
-    }
-    while (list && activeNow() < deadline) {
-      for (const row of list.rows || []) {
-        const generatedAt = globalThis.CHINAUMS_DOWNLOAD_RUNNER.timestampFromFileName(row.fileName, reportType, merchantNo);
-        const createdAt = parsePortalTimestamp(row.createdAt);
-        const identityMatched = Boolean(expectedFileName && row.fileName === expectedFileName);
-        if (generatedAt === null || !Number.isFinite(createdAt) ||
-          (!identityMatched && (generatedAt < attemptedAtMs - 2000 || createdAt < attemptedAtMs - 2000 ||
-            generatedAt > Date.now() + 2000 || createdAt > Date.now() + 2000)) ||
-          Object.values(state?.months || {}).some((month) => month.remoteFileName === row.fileName)) continue;
-        if (!expectedFileName || identityMatched) {
-          if (matches.has(row.fileName)) duplicateCandidate = true;
-          matches.set(row.fileName, row);
-        }
-      }
-      if (matches.size > 1) break;
-      if (list.hasNext === false) { complete = true; break; }
-      const page = Number(list.page);
-      if (!Number.isInteger(page) || page < 1 || list.hasNext !== true) break;
-      const next = await invokeSource("nextDownloadPage");
-      if (next?.status !== "clicked" || !await readPage(page + 1)) break;
-    }
-  }
-  const closed = await invokeSource("closeDownloadList");
-  if (!["closed", "already_closed"].includes(closed?.status)) return { status: "unknown", reason: "暂存列表未能安全关闭。" };
-  if (!complete || matches.size !== 1 || duplicateCandidate) return { status: "unknown", reason: "分页扫描不完整或未找到唯一候选；不自动重提。" };
-  if (!expectedFileName) return { status: "unknown", reason: "仅有时间窗口内的新任务，缺少本次申请返回的远端身份；不能证明归属，不自动重提。" };
-  const row = [...matches.values()][0];
-  return { status: "accepted", createdAt: row.createdAt, fileName: row.fileName, merchantNo };
 };
 
 const closeExistingSubmitNotice = async () => {
