@@ -296,7 +296,13 @@
         await transition({ month: month.key, status: "UNKNOWN", attemptedAt });
         let reconciliation = { status: "unknown" };
         try {
-          if (reconcileUnknown) reconciliation = await reconcileUnknown({ month, attemptedAt, gate, targetMerchantNo: activeMerchantNo });
+          if (reconcileUnknown) reconciliation = await reconcileUnknown({
+            month,
+            attemptedAt,
+            gate,
+            targetMerchantNo: activeMerchantNo,
+            baselineRows: baseline.rows
+          });
         } catch (error) {
           if (error?.message === "STOPPED_BY_USER") throw error;
           reconciliation.reason = error?.message || "未知申请对账失败";
@@ -307,6 +313,7 @@
             remoteCreatedAt: reconciliation.createdAt || null,
             reconciled: true,
             remoteFileName: reconciliation.fileName || null,
+            remoteTaskId: reconciliation.taskId || null,
             count: queryState.count
           });
           submitted = true;
