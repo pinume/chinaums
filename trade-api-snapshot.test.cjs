@@ -43,7 +43,7 @@ vm.runInContext(fs.readFileSync(__dirname + '/trade-audit.js','utf8'), context);
   });
   assert.equal(result.status, 'found');
   assert.equal(calls, 1, 'once every requested task ID is found, historical pages must not be scanned');
-  assert.deepEqual(result.rows.map(row => row.statusCode), ['ready','pending','failed']);
+  assert.deepEqual(Array.from(result.rows, row => row.statusCode), ['ready','pending','failed']);
   assert.equal(result.rows[0].filePath, '/apps/data/yjhxexport2026');
   assert.equal(result.rows[0].exportStatus, '02');
   assert.equal(result.rows[0].exportStatusDesc, '成功');
