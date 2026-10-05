@@ -50,6 +50,7 @@ const context = vm.createContext({
   clearTimeout: () => {},
   location: { hostname: "service.chinaums.com", pathname: "/uisportalfront/", hash: "#/auditOfTrade2026" },
   getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+  fetch: async () => { throw new Error("not used"); },
   document: {
     documentElement: new Element(),
     body: new Element("根据查询条件共查询到 1 条记录"),
