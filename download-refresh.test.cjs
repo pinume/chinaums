@@ -4,8 +4,8 @@ const originalNow = Date.now;
 let now = new Date(2026, 9, 3, 18).getTime();
 Date.now = () => now;
 const names = [1, 2, 3].map(n => `MER_89813014812B06R_2026100318000${n}_yjhx.xlsx`);
-async function run({failure = false, transientOpen = false, unavailableHint = false} = {}) {
-  let opens = 0, page = 1, opened = false, nextCalls = 0, openFailures = 0, hintFailures = 0;
+async function run({failure = false, transientOpen = false, unavailableHint = false, slowRefresh = false} = {}) {
+  let opens = 0, page = 1, opened = false, nextCalls = 0, openFailures = 0, hintFailures = 0, refreshReadyAt = 0;
   const clicks = [], events = [];
   const row = (index, ready) => ({fileName:names[index],createdAt:`2026-10-03 18:00:0${index+1}`,
     statusCode:ready?'ready':'pending',downloadEnabled:ready});
@@ -17,11 +17,17 @@ async function run({failure = false, transientOpen = false, unavailableHint = fa
     invoke:async(op,args)=>{
       if(op==='openDownloadList') {
         if(transientOpen && opens===1 && openFailures++===0)return {status:'controls_missing'};
-        opens++;opened=true;page=1;return {status:'clicked'};
+        opens++;opened=true;page=1;
+        if(slowRefresh && opens>1)refreshReadyAt=now+40000;
+        return {status:'clicked'};
       }
-      if(op==='closeDownloadList'){opened=false;return {status:'already_closed'};}
+      if(op==='closeDownloadList'){
+        if(slowRefresh)assert(now>=refreshReadyAt,'must keep a still-refreshing download list open');
+        opened=false;return {status:'already_closed'};
+      }
       if(op==='parseDownloadTasks') {
         if(!opened)return {status:'not_open'};
+        if(slowRefresh && now<refreshReadyAt)return {status:'loading'};
         if(failure && opens>1)return {status:'refresh_error'};
         return {status:'found',page,total:opens===1?3:4,hasNext:page===1,
           rows:page===1?[row(0,true),...(opens>1?[row(1,true)]:[])]:[row(2,opens>=3)]};
@@ -49,6 +55,6 @@ async function run({failure = false, transientOpen = false, unavailableHint = fa
     if(transientOpen)assert.equal(openFailures,2);
   }
 }
-(async()=>{await run();await run({failure:true});await run({transientOpen:true});await run({unavailableHint:true});
-  console.log('PASS: partial ready downloads, remaining-page scan, changed total, bounded refresh failures and transient reopen');
+(async()=>{await run();await run({failure:true});await run({transientOpen:true});await run({unavailableHint:true});await run({slowRefresh:true});
+  console.log('PASS: partial ready downloads, remaining-page scan, changed total, bounded refresh failures, transient reopen and slow refresh');
 })().catch(e=>{console.error(e);process.exitCode=1;}).finally(()=>{Date.now=originalNow;});
