@@ -150,22 +150,9 @@
           throw new Error(`${month.key} 导出已锁定：${submit?.reason || "控件状态未确认"}`);
         }
 
-        const responseDeadline = now() + 12000;
-        let response = ["accepted", "throttled", "failed"].includes(submit?.status)
+        const response = ["accepted", "throttled", "failed"].includes(submit?.status)
           ? submit
           : { status: "unknown", reason: submit?.reason };
-        while (submit?.status === "clicked" && now() < responseDeadline) {
-          await checkpoint();
-          try {
-            response = await invoke("classifySubmit", {});
-          } catch (error) {
-            if (error?.message === "STOPPED_BY_USER") throw error;
-            response = { status: "unknown", reason: error?.message || "提交结果未响应" };
-            break;
-          }
-          if (response?.status !== "unknown") break;
-          await sleep(500);
-        }
 
         if (response?.status === "accepted") {
           const accepted = await setMonthState(month, "SUBMITTED", { submittedAt: attemptedAt, remoteFileName: response.fileName || null, count: queryState.count });
