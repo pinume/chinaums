@@ -75,6 +75,80 @@
     .filter((table) => !table.closest(".el-dialog"))
     .map((table) => table.__vue__?.$parent)
     .find((component) => component?.$options?.name === "table");
+  const readQueryList = async (beginTransDate, endTransDate, deadline) => {
+    const component = reportComponent();
+    if (!component?.$axiosApi?.axiosPromisePara) throw new Error("以旧换新查询接口不可用。");
+    const userPortalToken = localStorage.getItem("userPortalVerifyToken");
+    if (!userPortalToken) throw new Error("页面登录令牌不可用。");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+    const checkDeadline = () => {
+      if (controller.signal.aborted || Date.now() >= deadline) {
+        controller.abort();
+        throw new Error("以旧换新查询已超过截止时间。");
+      }
+    };
+    try {
+      const rows = [];
+      let expectedTotal = null;
+      let expectedPages = null;
+      for (let current = 0; ; current += 1) {
+        checkDeadline();
+        const response = await component.$axiosApi.axiosPromisePara({
+          merOrderId: "",
+          transRef: "",
+          status: [],
+          beginTransDate,
+          endTransDate,
+          current,
+          size: 10
+        }, "uis-tradein-server/portal/yjhx/v3/queryList", {
+          signal: controller.signal,
+          timeout: Math.max(1, deadline - Date.now()),
+          headers: { userPortalToken }
+        });
+        checkDeadline();
+        if (response?.success !== true || String(response.code ?? "") !== "000000" ||
+          !Array.isArray(response.data?.list)) {
+          throw new Error("以旧换新查询接口结构异常。");
+        }
+        const page = response.data;
+        const total = Number(page.total);
+        const pages = Number(page.pages);
+        const size = Number(page.size);
+        const returnedCurrent = Number(page.current);
+        if (!Number.isInteger(total) || total < 0 || !Number.isInteger(pages) || pages < 0 ||
+          size !== 10 || returnedCurrent !== current) {
+          throw new Error("以旧换新查询分页信息异常。");
+        }
+        expectedTotal ??= total;
+        expectedPages ??= pages;
+        if (total !== expectedTotal || pages !== expectedPages) {
+          throw new Error("以旧换新查询分页总数在读取过程中发生变化。");
+        }
+        rows.push(...page.list);
+        if (total === 0) {
+          if (current !== 0 || page.list.length !== 0) throw new Error("以旧换新空查询分页结构异常。");
+          break;
+        }
+        if (pages < 1 || current >= pages) throw new Error("以旧换新查询页数异常。");
+        if (current + 1 >= pages) break;
+      }
+      if (rows.length !== expectedTotal ||
+        rows.some((row) => !row?.id || !row?.mchntId || !/^\d{8}$/.test(String(row.transDate || ""))) ||
+        new Set(rows.map((row) => String(row.id))).size !== rows.length ||
+        rows.some((row) => String(row.transDate) < beginTransDate || String(row.transDate) > endTransDate)) {
+        throw new Error("以旧换新查询结果分页不完整或身份异常。");
+      }
+      const merchants = [...new Set(rows.map((row) => normalize(row.mchntId)).filter(Boolean))];
+      if (expectedTotal > 0 && merchants.length !== 1) {
+        throw new Error("查询结果没有唯一商户身份；未申请导出。");
+      }
+      return { count: expectedTotal, merchantId: merchants[0] || null };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
   const downloadDialogComponent = (dialog) => {
     const instance = dialog.closest(".el-dialog__wrapper")?.__vue__;
     return [instance, instance?.$parent].find((component) => component?.$options?.name === "ElDialog");
@@ -124,108 +198,25 @@
         if (!queryTracker?.beginTransDate || !queryTracker?.endTransDate) {
           return { status: "failed", reason: "查询日期尚未安全设置。" };
         }
-        const component = reportComponent();
-        if (!component?.$axiosApi?.axiosPromisePara) {
-          return { status: "controls_missing", reason: "以旧换新查询接口不可用。" };
-        }
-        const userPortalToken = localStorage.getItem("userPortalVerifyToken");
-        if (!userPortalToken) return { status: "blocked", reason: "页面登录令牌不可用，未提交查询。" };
-        const deadline = args.operationDeadline ?? Date.now() + 60000;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
-        const checkDeadline = () => {
-          if (controller.signal.aborted || Date.now() >= deadline) {
-            controller.abort();
-            throw new Error("以旧换新查询已超过截止时间。");
-          }
-        };
         queryTracker.resultState = "querying";
         try {
-          const rows = [];
-          let expectedTotal = null;
-          let expectedPages = null;
-          for (let current = 0; ; current += 1) {
-            checkDeadline();
-            const response = await component.$axiosApi.axiosPromisePara({
-              merOrderId: "",
-              transRef: "",
-              status: [],
-              beginTransDate: queryTracker.beginTransDate,
-              endTransDate: queryTracker.endTransDate,
-              current,
-              size: 10
-            }, "uis-tradein-server/portal/yjhx/v3/queryList", {
-              signal: controller.signal,
-              timeout: Math.max(1, deadline - Date.now()),
-              headers: { userPortalToken }
-            });
-            checkDeadline();
-            if (response?.success !== true || String(response.code ?? "") !== "000000" ||
-              !Array.isArray(response.data?.list)) {
-              throw new Error("以旧换新查询接口结构异常。");
-            }
-            const page = response.data;
-            const total = Number(page.total);
-            const pages = Number(page.pages);
-            const size = Number(page.size);
-            const returnedCurrent = Number(page.current);
-            if (!Number.isInteger(total) || total < 0 || !Number.isInteger(pages) || pages < 0 ||
-              size !== 10 || returnedCurrent !== current) {
-              throw new Error("以旧换新查询分页信息异常。");
-            }
-            expectedTotal ??= total;
-            expectedPages ??= pages;
-            if (total !== expectedTotal || pages !== expectedPages) {
-              throw new Error("以旧换新查询分页总数在读取过程中发生变化。");
-            }
-            rows.push(...page.list);
-            if (total === 0) {
-              if (current !== 0 || page.list.length !== 0) throw new Error("以旧换新空查询分页结构异常。");
-              break;
-            }
-            if (pages < 1 || current >= pages) throw new Error("以旧换新查询页数异常。");
-            if (current + 1 >= pages) break;
-          }
-          if (rows.length !== expectedTotal ||
-            rows.some((row) => !row?.id || !row?.mchntId || !/^\d{8}$/.test(String(row.transDate || ""))) ||
-            new Set(rows.map((row) => String(row.id))).size !== rows.length ||
-            rows.some((row) => String(row.transDate) < queryTracker.beginTransDate ||
-              String(row.transDate) > queryTracker.endTransDate)) {
-            throw new Error("以旧换新查询结果分页不完整或身份异常。");
-          }
-          if (expectedTotal === 0) {
-            Object.assign(queryTracker, { resultState: "no_data", count: 0, merchantId: null, reason: null });
-            return { status: "clicked", source: "api" };
-          }
-          const merchants = [...new Set(rows.map((row) => normalize(row.mchntId)).filter(Boolean))];
-          if (merchants.length !== 1) {
-            Object.assign(queryTracker, {
-              resultState: "failed",
-              count: expectedTotal,
-              merchantId: null,
-              reason: "查询结果没有唯一商户身份；未申请导出。"
-            });
-            return { status: "clicked", source: "api" };
-          }
-          Object.assign(queryTracker, {
-            resultState: "ready",
-            count: expectedTotal,
-            merchantId: merchants[0],
-            reason: null
-          });
-          return { status: "clicked", source: "api" };
+          const result = await readQueryList(
+            queryTracker.beginTransDate,
+            queryTracker.endTransDate,
+            args.operationDeadline ?? Date.now() + 60000
+          );
+          Object.assign(queryTracker, result.count === 0
+            ? { resultState: "no_data", count: 0, merchantId: null, reason: null }
+            : { resultState: "ready", count: result.count, merchantId: result.merchantId, reason: null });
         } catch (error) {
           Object.assign(queryTracker, {
             resultState: "failed",
             count: null,
             merchantId: null,
-            reason: error?.name === "AbortError" ? "以旧换新查询接口在截止时间前未完成。" :
-              error?.message || "以旧换新查询接口调用失败。"
+            reason: error?.message || "以旧换新查询接口调用失败。"
           });
-          return { status: "clicked", source: "api" };
-        } finally {
-          clearTimeout(timer);
         }
+        return { status: "clicked", source: "api" };
       }
       case "queryState": {
         if (!queryTracker || ["set", "querying"].includes(queryTracker.resultState)) return { status: "waiting" };
@@ -257,6 +248,20 @@
         const component = reportComponent();
         if (!component?.$axiosApi?.axiosPromisePara) {
           return { status: "blocked", reason: "页面导出接口不可用，未申请导出。" };
+        }
+        try {
+          const verifyDeadline = Math.min(
+            (args.operationDeadline ?? Date.now() + 60000) - 12000,
+            Date.now() + 45000
+          );
+          if (verifyDeadline <= Date.now()) return { status: "blocked", reason: "提交前商户接口复核没有剩余安全时间。" };
+          const verified = await readQueryList(queryTracker.beginTransDate, queryTracker.endTransDate, verifyDeadline);
+          if (verified.count <= 0 || verified.merchantId !== queryTracker.merchantId ||
+            verified.merchantId !== args.targetMerchantId) {
+            return { status: "blocked", reason: "提交前接口复核发现商户身份已变化或查询已无数据；未申请导出。" };
+          }
+        } catch (error) {
+          return { status: "blocked", reason: `提交前接口复核失败：${error?.message || "查询身份无法确认"}` };
         }
         const userPortalToken = localStorage.getItem("userPortalVerifyToken");
         if (!userPortalToken) {
