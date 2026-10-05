@@ -296,6 +296,7 @@
           hasExport: Boolean(exportControl()),
           hasDownloadList: [...document.querySelectorAll("button#download")].filter(visible)
             .filter((element) => !element.disabled).length === 1,
+          downloadListOpen: hasDownloadList()
         };
       }
       case "setDateRange": {
