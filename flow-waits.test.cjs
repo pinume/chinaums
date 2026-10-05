@@ -37,41 +37,34 @@ async function check(trade, stuck) {
       throw Error(op);
     }});
   assert.equal(submitted,1);
-  let closed = false, closing = false, reads = 0, downloads = 0;
+  let downloads = 0, downloadPaused = false;
+  const calls = [];
   const promise = c.CHINAUMS_DOWNLOAD_RUNNER.run({reportType:trade?'trade-audit':'account-detail',merchantNo:'MERCHANT1',
     gate:{allowed:true,merchantNo:'MERCHANT1'},startedAt:new Clock().toISOString(),
     submittedMonths:[{month:'2026-01',remoteFileName:file,remoteTaskId:'task-1',submittedAt:new Clock().toISOString()}],now:c.now,
-    sleep:async ms=>{wall+=ms;},checkpoint:async()=>{if(closing&&reads===0)pause();},transition:async()=>{},
-    invoke:async op=>{
+    sleep:async ms=>{wall+=ms;},checkpoint:async()=>{if(!downloadPaused){downloadPaused=true;pause();}},transition:async()=>{},
+    invoke:async (op,args)=>{
+      calls.push(op);
       if(op==='snapshotExportTasks'){
         return {status:'found',rows:[{id:'task-1',fileName:file,statusCode:'ready',
           ...(trade?{exportStatus:'02',exportStatusDesc:'成功'}:{taskStatus:'30'})}]};
       }
-      if(op==='openDownloadList')return {status:'clicked'};
-      if(op==='setDownloadPageSize')return {status:'unchanged'};
-      if(op==='parseDownloadTasks'){
-        if(closing&&++reads===2&&!stuck)closed=true;
-        return closed?{status:'not_open'}:{status:'found',page:1,total:1,hasNext:false,rows:[{fileName:file,createdAt:'2026-10-03 00:00:01',statusCode:'ready',downloadEnabled:true}]};
-      }
       if(op==='downloadTaskDirect'){
-        if(trade)throw Error('trade must still use its list UI');
+        assert.equal(args.fileName,file);
         downloads++;
         return {status:'download_requested'};
       }
-      if(op==='downloadTask'){downloads++;return {status:'download_requested'};}
-      if(op==='confirmDownload')return {status:'download_completed',downloadId:1};
-      if(op==='closeDownloadList'){closing=true;return {status:'closed'};}
+      if(op==='confirmDownload')return stuck?{status:'download_unknown'}:{status:'download_completed',downloadId:1};
       throw Error(op);
     }});
-  if(trade&&stuck)await assert.rejects(promise,/关闭结果无法确认/);
-  else {
-    await promise;
-    if(trade)assert(closed,'final close must be observed before success');
-    else assert.equal(closing,false,'account direct download must not open or close the list');
+  if(stuck)await assert.rejects(promise,/下载完成状态无法确认/);
+  else await promise;
+  for(const operation of ['openDownloadList','parseDownloadTasks','downloadTask','closeDownloadList']) {
+    assert(!calls.includes(operation), 'direct download must not use list UI');
   }
   assert.equal(downloads,1);
 }
 (async()=>{
   for(const trade of [false,true])for(const stuck of [false,true])await check(trade,stuck);
-  console.log('PASS: pauses preserve deadlines; account direct download skips list UI while trade final close remains verified');
+  console.log('PASS: pauses preserve deadlines; both reports download directly and stop when Chrome completion is unknown');
 })().catch(e=>{console.error(e);process.exitCode=1;});
