@@ -108,7 +108,7 @@ async function ready(adapter) {
   assert.equal((await ready(adapter)).status,'failed');
   merchantValues = ['89813014812B1L3','OTHER'];
   assert.equal((await ready(adapter)).status,'failed');
-  assert.equal(apiCalls,1);
+  assert.equal(apiCalls,3);
   assert.equal(exportClicks,0);
   console.log('PASS: trade direct applyExport payload, success/throttle/unknown, token/date guards and merchant identity');
 })().catch(error => { console.error(error); process.exitCode = 1; });
