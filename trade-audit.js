@@ -229,8 +229,6 @@
           reason: date.error || (!exactButton("查询") ? "可用查询按钮缺失或不唯一。" : null),
           dateValue: date.input?.value ?? null,
           hasQuery: Boolean(exactButton("查询")),
-          hasExport: Boolean(exactButton("批量导出")),
-          hasDownloadList: Boolean(exactButton("下载暂存列表")),
           downloadListOpen: downloadDialogs().length > 0,
           count: resultCount()
         };
@@ -318,7 +316,6 @@
         }
         if (Date.now() - queryTracker.candidateSince < 500) return { status: "waiting" };
         const count = resultCount();
-        const exportButton = exactButton("批量导出");
         const currentResult = JSON.parse(signature);
         const noDataText = [...document.querySelectorAll(".el-table__empty-text,.el-empty__description")]
           .filter(visible)
@@ -328,7 +325,7 @@
           finishQueryObservation();
           return { status: "no_data", count: count ?? 0 };
         }
-        if (count !== null && currentResult.rows.length > 0 && exportButton) {
+        if (count !== null && currentResult.rows.length > 0) {
           const merchants = queryMerchantIds();
           if (merchants.length !== 1 || (args.targetMerchantId && merchants[0] !== args.targetMerchantId)) {
             finishQueryObservation();
@@ -347,8 +344,7 @@
         if (gate?.authentication?.status !== "logged_in" || gate.authentication.confidence !== "high") {
           return { status: "blocked", reason: "商户门禁未通过，不允许申请导出。" };
         }
-        if (queryTracker?.resultState !== "ready" || resultCount() === null ||
-          !exactButton("批量导出")) {
+        if (queryTracker?.resultState !== "ready" || resultCount() === null) {
           return { status: "blocked", reason: "查询结果未就绪，导出操作已锁定。" };
         }
         const merchants = queryMerchantIds();
