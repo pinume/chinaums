@@ -48,8 +48,10 @@ class FormData {
   constructor(target) {
     assert.equal(target, form);
   }
-  getAll(name) {
-    return formValues[name] ? [...formValues[name]] : [];
+  *[Symbol.iterator]() {
+    for (const name of fieldNames) {
+      for (const value of formValues[name] || []) yield [name, value];
+    }
   }
 }
 
