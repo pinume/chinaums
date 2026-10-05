@@ -323,7 +323,7 @@ const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => 
     const globalName = reportType === "account-detail"
       ? "__chinaumsAccountDetailAdapter"
       : "__chinaumsTradeAuditAdapter";
-    const world = reportType === "trade-audit" ? "MAIN" : "ISOLATED";
+    const world = "MAIN";
     const loaded = await chrome.scripting.executeScript({
       target: { tabId: targetTabId, frameIds: [frameId] }, world,
       func: (name) => typeof globalThis[name] === "function",
