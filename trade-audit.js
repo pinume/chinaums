@@ -173,6 +173,23 @@
       .find((candidate) => typeof candidate?.visible === "boolean");
     return typeof component?.visible === "boolean" ? component.visible : visible(dialog);
   };
+  const waitForModalClose = (isClosed, operationDeadline) => new Promise((resolve) => {
+    if (isClosed()) return resolve(true);
+    let timer;
+    const finish = (value) => {
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const observer = new MutationObserver(() => {
+      if (isClosed()) finish(true);
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
+      attributeFilter: ["class", "style", "hidden"] });
+    const deadline = Math.min(Date.now() + 8000, operationDeadline ?? Infinity);
+    timer = setTimeout(() => finish(isClosed()), Math.max(0, deadline - Date.now()));
+    if (isClosed()) finish(true);
+  });
   const dialogTexts = () => [...document.querySelectorAll(
     '[role="dialog"],[aria-modal="true"],.el-message-box,.el-dialog'
   )]
@@ -465,23 +482,7 @@
         scoped[0].click();
         const isClosed = () => !modalOpen(dialog) && dialogTexts().length === 0;
         // 后台页面的连续短计时器会被节流；由 DOM 变化直接确认关闭。
-        const closed = await new Promise((resolve) => {
-          if (isClosed()) return resolve(true);
-          let timer;
-          const finish = (value) => {
-            observer.disconnect();
-            clearTimeout(timer);
-            resolve(value);
-          };
-          const observer = new MutationObserver(() => {
-            if (isClosed()) finish(true);
-          });
-          observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
-            attributeFilter: ["class", "style", "hidden"] });
-          const deadline = Math.min(Date.now() + 8000, args.operationDeadline ?? Infinity);
-          timer = setTimeout(() => finish(isClosed()), Math.max(0, deadline - Date.now()));
-          if (isClosed()) finish(true);
-        });
+        const closed = await waitForModalClose(isClosed, args.operationDeadline);
         if (closed) return { status: "closed" };
         return { status: "blocked", reason: `关闭等待8秒后仍未就绪（目标提示${modalOpen(dialog) ? "仍打开" : "已关闭"}，仍打开弹窗${dialogTexts().length}个）；未继续下一步。` };
       }
@@ -554,23 +555,8 @@
         close[0].click();
         const component = downloadDialogComponent(dialogs[0]);
         if (component && component.visible !== false) {
-          const closed = await new Promise((resolve) => {
-            let timer;
-            const isClosed = () => component.visible === false || downloadDialogs().length === 0;
-            const finish = (value) => {
-              observer.disconnect();
-              clearTimeout(timer);
-              resolve(value);
-            };
-            const observer = new MutationObserver(() => {
-              if (isClosed()) finish(true);
-            });
-            observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
-              attributeFilter: ["class", "style", "hidden"] });
-            const deadline = Math.min(Date.now() + 8000, args.operationDeadline ?? Infinity);
-            timer = setTimeout(() => finish(isClosed()), Math.max(0, deadline - Date.now()));
-            if (isClosed()) finish(true);
-          });
+          const isClosed = () => component.visible === false || downloadDialogs().length === 0;
+          const closed = await waitForModalClose(isClosed, args.operationDeadline);
           if (!closed) return { status: "blocked", reason: "点击关闭后，下载暂存列表组件在8秒内仍保持打开。" };
         }
         downloadRefresh?.observer?.disconnect();
