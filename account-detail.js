@@ -401,7 +401,8 @@
         } catch (error) {
           return { status: "blocked", reason: `提交前接口复核失败：${error?.message || "查询身份无法确认"}` };
         }
-        if (verified.count <= 0 || verified.merchantNo !== queryTracker.merchantNo ||
+        if (verified.count <= 0 || verified.count !== queryTracker.count ||
+          verified.merchantNo !== queryTracker.merchantNo ||
           verified.merchantNo !== normalize(args.targetMerchantNo) ||
           verified.filterSignature !== queryTracker.filterSignature) {
           return { status: "blocked", reason: "提交前接口复核发现商户、查询条件或数据状态已变化；未申请导出。" };
