@@ -13,22 +13,24 @@ class Element {
   getClientRects() { return [1]; }
   querySelectorAll() { return []; }
   querySelector() { return null; }
-  closest(selector) { return selector === "form" ? this.form || null : null; }
+  closest() { return null; }
   getAttribute() { return null; }
 }
 class HTMLInputElement extends Element {}
 
 const merchantNo = "89813015722APT1";
-const fieldNames = [
+const queryFields = [
   "settDateBegin", "settDateEnd", "pageSize", "dealDateBegin", "dealDateEnd", "transStatus",
   "dealType", "busiTypeIdList", "fdId", "zdCode", "amount1", "amount2", "fkhNo",
   "bankCardNo1", "bankCardNo2", "dealMode", "bingJieFlag", "refNum", "merOrderId",
-  "bankOrder", "searchNo", "searchObj", "fileExt", "regularFee", "d"
+  "bankOrder", "searchNo", "searchObj"
 ];
+const exportOnlyFields = ["fileExt", "regularFee", "d"];
+const fieldNames = [...queryFields, ...exportOnlyFields];
 const formValues = Object.fromEntries(fieldNames.map((name) => [name, [""]]));
 Object.assign(formValues, {
-  settDateBegin: ["20261004"],
-  settDateEnd: ["20261004"],
+  settDateBegin: ["stale"],
+  settDateEnd: ["stale"],
   pageSize: ["5"],
   transStatus: ["1"],
   searchObj: ["1"],
@@ -40,24 +42,22 @@ form.querySelector = (selector) => {
   const match = selector.match(/^\[name="([^"]+)"\]$/);
   return match && Object.hasOwn(formValues, match[1]) ? new Element() : null;
 };
-const exportButton = new Element("申请下载xlsx");
-exportButton.form = form;
-exportButton.click = () => { throw new Error("submit must not click the page export control"); };
 
 class FormData {
-  constructor(target) {
-    assert.equal(target, form);
-  }
+  constructor(target) { assert.equal(target, form); }
   *[Symbol.iterator]() {
     for (const name of fieldNames) {
-      for (const value of formValues[name] || []) yield [name, value];
+      for (const value of formValues[name]) yield [name, value];
     }
   }
 }
 
-let responseData = { respDesc: "对账明细下载成功", respCode: "000000" };
-let fetchCalls = 0;
-let lastRequest = null;
+let exportResponse = { respDesc: "对账明细下载成功", respCode: "000000" };
+let queryMerchant = merchantNo;
+let queryCalls = 0;
+let exportCalls = 0;
+let lastExportRequest = null;
+
 const context = vm.createContext({
   Element,
   HTMLInputElement,
@@ -70,77 +70,97 @@ const context = vm.createContext({
   location: { hostname: "service.chinaums.com", pathname: "/uisportal/accountCheckDetailQry/toDetail" },
   getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
   document: {
-    body: new Element("根据输入条件共查询到 1 条"),
+    body: new Element(),
+    documentElement: new Element(),
     querySelectorAll(selector) {
-      if (selector === "#crtt_download_xlsx") return [exportButton];
       if (selector === "form") return [form];
       return [];
     }
   },
   fetch: async (url, options) => {
-    fetchCalls += 1;
-    lastRequest = { url, options };
-    return { ok: true, status: 200, json: async () => responseData };
+    if (url === "/uisportal/accountCheckDetailQry/qryAccountCheck") {
+      queryCalls += 1;
+      const payload = new URLSearchParams(options.body);
+      return { ok: true, status: 200, json: async () => ({
+        respCode: "000000",
+        respDesc: "通用对账明细查询成功",
+        pageObj: {
+          content: [{ rownum_: 1, mer_no: queryMerchant, sett_date: payload.get("settDateBegin") }],
+          totalPages: 1,
+          totalElements: 1,
+          number: 0,
+          size: 5
+        }
+      }) };
+    }
+    if (url === "/uisportal/accountCheckDetailQry/downDeailBill") {
+      exportCalls += 1;
+      lastExportRequest = { url, options };
+      return { ok: true, status: 200, json: async () => exportResponse };
+    }
+    throw new Error(url);
   }
 });
+vm.runInContext(fs.readFileSync(`${__dirname}/account-detail.js`, "utf8"), context);
 
-let source = fs.readFileSync(`${__dirname}/account-detail.js`, "utf8");
-source = source.replace(
-  "globalThis.__chinaumsAccountDetailAdapter = async",
-  "globalThis.__setAccountQueryTracker = (value) => { queryTracker = value; };\n  globalThis.__chinaumsAccountDetailAdapter = async"
-);
-vm.runInContext(source, context);
-
-const setReady = () => context.__setAccountQueryTracker({
-  merchantNo,
-  resultState: "ready",
-  dateValue: "2026/10/04 ~ 2026/10/04"
-});
-const submit = () => context.__chinaumsAccountDetailAdapter("submitExport", {
+async function ready(adapter) {
+  assert.equal((await adapter("setDateRange", { start: "2026-10-04", end: "2026-10-04" })).status, "set");
+  assert.equal((await adapter("query", { operationDeadline: Date.now() + 10000 })).status, "clicked");
+  assert.equal((await adapter("queryState", { targetMerchantNo: merchantNo })).status, "ready");
+}
+const submit = (adapter) => adapter("submitExport", {
   gate: { allowed: true, merchantNo },
-  targetMerchantNo: merchantNo
+  targetMerchantNo: merchantNo,
+  operationDeadline: Date.now() + 30000
 });
 
 (async () => {
-  setReady();
-  let result = await submit();
+  const adapter = context.__chinaumsAccountDetailAdapter;
+
+  await ready(adapter);
+  let result = await submit(adapter);
   assert.equal(result.status, "accepted");
   assert.equal(result.source, "api");
-  assert.equal(fetchCalls, 1);
-  assert.equal(lastRequest.url, "/uisportal/accountCheckDetailQry/downDeailBill");
-  assert.equal(lastRequest.options.method, "POST");
-  assert.equal(lastRequest.options.credentials, "same-origin");
-  assert.equal(lastRequest.options.headers["X-Requested-With"], "XMLHttpRequest");
-  const body = new URLSearchParams(lastRequest.options.body);
+  assert.equal(queryCalls, 2, "submit must recheck qryAccountCheck before downDeailBill");
+  assert.equal(exportCalls, 1);
+  assert.equal(lastExportRequest.options.method, "POST");
+  assert.equal(lastExportRequest.options.credentials, "same-origin");
+  assert.equal(lastExportRequest.options.headers["X-Requested-With"], "XMLHttpRequest");
+  const body = new URLSearchParams(lastExportRequest.options.body);
   assert.equal(body.get("settDateBegin"), "20261004");
   assert.equal(body.get("settDateEnd"), "20261004");
   assert.equal(body.get("pageSize"), "5");
   assert.equal(body.get("transStatus"), "1");
   assert.equal(body.get("searchObj"), "1");
-  assert.equal(body.get("fileExt"), "xlsx", "XLSX export must override any page field value");
-  assert.deepEqual([...body.keys()], fieldNames, "request must use the captured page export fields only");
+  assert.equal(body.get("fileExt"), "xlsx");
+  assert.deepEqual([...body.keys()], fieldNames);
 
-  responseData = {
+  queryMerchant = "OTHER";
+  const exportsBeforeSwitch = exportCalls;
+  result = await submit(adapter);
+  assert.equal(result.status, "blocked");
+  assert.match(result.reason, /商户、查询条件或数据状态已变化/);
+  assert.equal(exportCalls, exportsBeforeSwitch, "merchant switch must stop before downDeailBill");
+  queryMerchant = merchantNo;
+
+  exportResponse = {
     respDesc: "您已有超过3条未处理或处理中的导出文件，请稍后再试",
     respCode: "999999"
   };
-  setReady();
-  result = await submit();
+  result = await submit(adapter);
   assert.equal(result.status, "throttled");
   assert.equal(result.source, "api");
 
-  responseData = { respDesc: "系统异常", respCode: "999999" };
-  setReady();
-  result = await submit();
-  assert.equal(result.status, "unknown", "uncaptured 999999 meanings must not be guessed as throttling or failure");
+  exportResponse = { respDesc: "系统异常", respCode: "999999" };
+  result = await submit(adapter);
+  assert.equal(result.status, "unknown");
 
-  formValues.settDateBegin = ["20261003"];
-  setReady();
-  const callsBeforeMismatch = fetchCalls;
-  result = await submit();
+  formValues.transStatus = ["9"];
+  const exportsBeforeDrift = exportCalls;
+  result = await submit(adapter);
   assert.equal(result.status, "blocked");
-  assert.match(result.reason, /清算日期.*不一致/);
-  assert.equal(fetchCalls, callsBeforeMismatch, "date mismatch must stop before the submit side effect");
+  assert.match(result.reason, /查询条件.*变化/);
+  assert.equal(exportCalls, exportsBeforeDrift, "filter drift must stop before submit side effect");
 
-  console.log("PASS: account XLSX submit uses captured API payload, classifies exact success/throttle responses, and blocks date drift");
+  console.log("PASS: account submit rechecks qryAccountCheck identity/filter state, then uses captured downDeailBill payload and exact throttle classification");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
