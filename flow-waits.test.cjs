@@ -40,12 +40,12 @@ async function check(trade, stuck) {
   let closed = false, closing = false, reads = 0, downloads = 0;
   const promise = c.CHINAUMS_DOWNLOAD_RUNNER.run({reportType:trade?'trade-audit':'account-detail',merchantNo:'MERCHANT1',
     gate:{allowed:true,merchantNo:'MERCHANT1'},startedAt:new Clock().toISOString(),
-    submittedMonths:[{month:'2026-01',remoteFileName:file,remoteTaskId:trade?'task-1':null,submittedAt:new Clock().toISOString()}],now:c.now,
+    submittedMonths:[{month:'2026-01',remoteFileName:file,remoteTaskId:'task-1',submittedAt:new Clock().toISOString()}],now:c.now,
     sleep:async ms=>{wall+=ms;},checkpoint:async()=>{if(closing&&reads===0)pause();},transition:async()=>{},
     invoke:async op=>{
       if(op==='snapshotExportTasks'){
-        if(!trade)throw Error('account detail must not poll trade snapshot');
-        return {status:'found',rows:[{id:'task-1',fileName:file,statusCode:'ready',exportStatus:'02',exportStatusDesc:'成功'}]};
+        return {status:'found',rows:[{id:'task-1',fileName:file,statusCode:'ready',
+          ...(trade?{exportStatus:'02',exportStatusDesc:'成功'}:{taskStatus:'30'})}]};
       }
       if(op==='openDownloadList')return {status:'clicked'};
       if(op==='setDownloadPageSize')return {status:'unchanged'};
