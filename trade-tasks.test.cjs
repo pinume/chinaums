@@ -22,7 +22,6 @@ class Element {
 const input = new Element();
 input.value = "2026/10/01 ~ 2026/10/05";
 const query = new Element("查询");
-const exportButton = new Element("批量导出");
 let component = { $options: { name: "ElDialog" }, visible: true };
 let closeWorks = true;
 let closeClicks = 0;
@@ -57,7 +56,7 @@ const context = vm.createContext({
     body: new Element("根据查询条件共查询到 1 条记录"),
     querySelectorAll(selector) {
       if (selector === "input.deal-date") return [input];
-      if (selector === "button") return [query, exportButton];
+      if (selector === "button") return [query];
       if (selector === ".el-dialog") return [dialog];
       return [];
     }
@@ -69,9 +68,8 @@ vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, "utf8"), context)
   const adapter = context.__chinaumsTradeAuditAdapter;
 
   let inspection = await adapter("inspect");
-  assert.equal(inspection.status, "ready", "download-list button is no longer required for report readiness");
+  assert.equal(inspection.status, "ready", "export and download-list buttons are no longer required for report readiness");
   assert.equal(inspection.hasQuery, true);
-  assert.equal(inspection.hasDownloadList, false);
   assert.equal(inspection.downloadListOpen, true);
 
   let result = await adapter("closeDownloadList", {});
