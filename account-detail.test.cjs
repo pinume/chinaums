@@ -7,6 +7,8 @@ let opens = 0;
 let page = 1;
 let size = 5;
 let buttonDelay = 0;
+let snapshotCalls = 0;
+let snapshotReadyAfter = Infinity;
 const downloads = [];
 const pageSizes = [];
 const today = new Date();
@@ -34,7 +36,7 @@ const rows = Array.from({ length: 35 }, (_, index) => {
   const button = new Element("下载", undefined, () => {
     assert(!downloads.includes(fileName)); downloads.push(fileName);
   });
-  Object.defineProperty(button, "disabled", { get: () => index === 0 && opens === 1 });
+  Object.defineProperty(button, "disabled", { get: () => false });
   const cells = [new Element(`${dateText} 00:00:${String(35 - index).padStart(2, "0")}`),
     new Element(fileName), new Element(() => button.disabled ? "排队中" : "已生成"), new Element("下载")];
   return new Element(() => cells.map((cell) => cell.innerText).join(" "),
@@ -47,7 +49,6 @@ select.dispatchEvent = () => { pageSizes.push(size); page = 1; };
 const navigation = [new Element("首页", undefined, () => { page = 1; }),
   new Element("上一页", undefined, () => { page -= 1; }), new Element("下一页", undefined, () => { page += 1; })];
 const close = new Element("×", undefined, () => {
-  if (opens === 1) assert.equal(downloads.length, 11, "ready files must download before refresh");
   opened = false;
   buttonDelay = 2;
 });
@@ -67,8 +68,23 @@ dialog.parentElement = wrapper;
 const launch = new Element("下载暂存列表", undefined, () => { opened = true; opens += 1; size = 5; page = 1; });
 launch.getClientRects = () => buttonDelay-- > 0 ? [] : [1];
 let resourceEntries = [{ name: "/uisportal/accountCheckDetailQry/selectDeailBillList", startTime: 1, responseEnd: 2, responseStatus: 200 }];
+const snapshotRows = () => rows.slice(0, 12).map((row, index) => ({
+  export_id: `remote-${index + 1}`,
+  file_name: row.querySelectorAll("td")[1].innerText,
+  task_status: index === 0 && snapshotCalls < snapshotReadyAfter ? "10" : "30"
+}));
 const context = vm.createContext({
-  Element, Event, Date, setTimeout,
+  Element, Event, Date, AbortController, setTimeout, clearTimeout,
+  fetch: async () => {
+    snapshotCalls += 1;
+    return {
+      ok: true,
+      json: async () => ({
+        respCode: "000000",
+        list: { content: snapshotRows(), totalPages: 35, totalElements: 175 }
+      })
+    };
+  },
   performance: { now: () => 0, getEntriesByType: () => resourceEntries },
   getComputedStyle: (element) => ({ display: "block", visibility: "visible", opacity: element === wrapper && !opened ? "0" : "1" }),
   location: { hostname: "service.chinaums.com", pathname: "/uisportal/accountCheckDetailQry/toDetail" },
@@ -86,6 +102,10 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
 
 (async () => {
   const adapter = context.__chinaumsAccountDetailAdapter;
+  const snapshot = await adapter("snapshotExportTasks", { taskIds: ["remote-1", "remote-2"] });
+  assert.equal(snapshotCalls, 1, "target task IDs on the first page must stop historical pagination");
+  assert.deepEqual(Array.from(snapshot.rows, (row) => row.statusCode), ["pending", "ready"]);
+  assert.deepEqual(Array.from(snapshot.rows, (row) => row.taskStatus), ["10", "30"]);
   const invoke = async (operation, args) => {
     const result = await adapter(operation, args);
     if (operation !== "parseDownloadTasks" || result.status !== "loading") return result;
@@ -106,6 +126,7 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
   await invoke("selectDownloadPage", { page: 1 });
   assert.equal(page, 1);
   opens = 0; opened = false;
+  snapshotReadyAfter = snapshotCalls + 2;
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 24);
   const result = await context.CHINAUMS_DOWNLOAD_RUNNER.run({
     invoke: async (operation, args) => {
@@ -115,15 +136,18 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
       }
       return invoke(operation, args);
     }, reportType: "account-detail", merchantNo, startedAt: start.toISOString(),
-    submittedMonths: Array.from({ length: 12 }, (_, index) => ({ month: `2026-${index + 1}`, remoteFileName: rows[index].querySelectorAll("td")[1].innerText, submittedAt: start.toISOString() })),
+    submittedMonths: Array.from({ length: 12 }, (_, index) => ({ month: `2026-${index + 1}`,
+      remoteFileName: rows[index].querySelectorAll("td")[1].innerText, remoteTaskId: `remote-${index + 1}`, submittedAt: start.toISOString() })),
     gate: { allowed: true, merchantNo }, checkpoint: async () => {}, sleep: async () => {}, transition: async () => {}
   });
   assert.equal(result.length, 12);
   assert.equal(downloads.length, 12);
-  assert.deepEqual(pageSizes, [20, 20]);
+  assert.deepEqual(pageSizes, [20]);
+  assert.equal(opens, 1, "account download list opens only after the API reports every task ready");
+  assert.equal(snapshotCalls, 3, "account generation waits through the task API before opening the list");
   assert.equal(opened, false);
   assert.equal((await invoke("parseDownloadTasks")).status, "not_found");
   assert.equal(page, 1, "no need to scan historical pages once all current tasks are found");
-  console.log("PASS: native page size 20, navigation, ready-first downloads, refresh, no duplicates and final close");
+  console.log("PASS: account task API maps 10/30, waits before one UI open, paginates exact files and closes once");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 
