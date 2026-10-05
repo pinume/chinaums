@@ -17,11 +17,14 @@ async function check(mode) {
       if(op==='query')return {status:'clicked'};
       if(op==='queryState')return {status:'ready',count:1,merchantNo:merchant};
       if(op==='snapshotExportTasks')return {status:'found',rows:[...tasks]};
-      if(op==='submitExport'){assert(!opened);submits++;return {status:'clicked'};}
-      if(op==='classifySubmit'){
-        if(month==='2026-02'&&!throttled){throttled=true;return {status:'throttled'};}
-        tasks.push({id:month,fileName:`${merchant}_MX_2026100300000${tasks.length+1}.xlsx`});return {status:'accepted'};
+      if(op==='submitExport'){
+        assert(!opened);
+        submits++;
+        if(month==='2026-02'&&!throttled){throttled=true;return {status:'throttled',source:'api'};}
+        tasks.push({id:month,fileName:`${merchant}_MX_2026100300000${tasks.length+1}.xlsx`});
+        return {status:'accepted',source:'api'};
       }
+      if(op==='classifySubmit')throw Error('direct account submit must not wait for UI classification');
       if(op==='closeSubmitDialog')return {status:'closed'};
       if(op==='openDownloadList'){opened=true;return {status:'clicked'};}
       if(op==='setDownloadPageSize')return {status:'unchanged'};
