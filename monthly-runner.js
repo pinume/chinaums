@@ -244,29 +244,22 @@
           if (reportType === "account-detail") {
             const submittedTasks = results.filter((item) => item.status === "SUBMITTED" &&
               item.remoteTaskId && item.remoteFileName);
+            const taskIds = submittedTasks.map((item) => String(item.remoteTaskId));
             let baselinePending = null;
             let slotReleased = false;
             try {
-              while (submittedTasks.length && now() < end) {
+              while (taskIds.length && now() < end) {
                 await checkpoint();
-                const taskIds = submittedTasks.map((item) => String(item.remoteTaskId));
                 const snapshot = await invoke("snapshotExportTasks", {
                   taskIds,
                   operationDeadline: Date.now() + Math.min(15000, Math.max(0, end - now()))
                 });
                 if (snapshot?.status !== "found" || !Array.isArray(snapshot.rows)) break;
                 const byId = new Map(snapshot.rows.map((row) => [String(row.id || ""), row]));
-                const rows = submittedTasks.map((item) => byId.get(String(item.remoteTaskId))).filter(Boolean);
-                if (rows.length !== submittedTasks.length) break;
-                let identityValid = true;
-                for (let index = 0; index < submittedTasks.length; index += 1) {
-                  if (rows[index].fileName !== submittedTasks[index].remoteFileName ||
-                    !["pending", "ready"].includes(rows[index].statusCode)) {
-                    identityValid = false;
-                    break;
-                  }
-                }
-                if (!identityValid) break;
+                const rows = submittedTasks.map((item) => byId.get(String(item.remoteTaskId)));
+                if (rows.some((row, index) => !row ||
+                  row.fileName !== submittedTasks[index].remoteFileName ||
+                  !["pending", "ready"].includes(row.statusCode))) break;
                 const pending = rows.filter((row) => row.statusCode === "pending").length;
                 await transition({ month: month.key, status: "WAITING_FOR_SLOT",
                   retryInMs: Math.max(0, end - now()), attempt: throttleAttempts,
