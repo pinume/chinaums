@@ -23,6 +23,7 @@ exportButton.click = () => { throw new Error("direct trade submit must not click
 const listButton = new Element("下载暂存列表");
 
 let responseData = { success: true, code: "000000", message: "成功", data: null };
+let token = "TEST_TOKEN";
 let apiCalls = 0;
 let lastCall = null;
 const component = {
@@ -47,7 +48,7 @@ const context = vm.createContext({
   localStorage: {
     getItem: (key) => {
       assert.equal(key, "userPortalVerifyToken");
-      return "TEST_TOKEN";
+      return token;
     }
   },
   location: {
@@ -123,6 +124,15 @@ const submit = () => context.__chinaumsTradeAuditAdapter("submitExport", {
   setReady();
   result = await submit();
   assert.equal(result.status, "unknown", "uncaptured 999999 meanings must not be guessed as throttling");
+
+  token = "";
+  setReady();
+  const callsBeforeMissingToken = apiCalls;
+  result = await submit();
+  assert.equal(result.status, "blocked");
+  assert.match(result.reason, /登录令牌不可用/);
+  assert.equal(apiCalls, callsBeforeMissingToken, "missing token must stop before applyExport side effect");
+  token = "TEST_TOKEN";
 
   dateInput.value = "2026/10/02 ~ 2026/10/05";
   setReady();
