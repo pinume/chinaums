@@ -81,10 +81,10 @@ context.chrome = {
   } },
   scripting: { executeScript: async ({ args, files, world }) => {
     if (files) {
-      if (files.includes(trade ? "trade-audit.js" : "account-detail.js")) { assert.equal(world, trade ? "MAIN" : "ISOLATED"); adapterInjections += 1; }
+      if (files.includes(trade ? "trade-audit.js" : "account-detail.js")) { assert.equal(world, "MAIN"); adapterInjections += 1; }
       return [];
     }
-    if (args[0] === (trade ? "__chinaumsTradeAuditAdapter" : "__chinaumsAccountDetailAdapter")) assert.equal(world, trade ? "MAIN" : "ISOLATED");
+    if (args[0] === (trade ? "__chinaumsTradeAuditAdapter" : "__chinaumsAccountDetailAdapter")) assert.equal(world, "MAIN");
     if (args[0]?.reportType) return [{ frameId: 0, result: { isReportFrame: true } }];
     if (typeof args[0] === "object") return [{ result: { isTopFrame: true, url: tab.url } }];
     if (args.length === 1) return [{ result: true }];
