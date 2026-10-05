@@ -66,6 +66,7 @@ const table = new Element("", (selector) => selector === "tr" ? [header] : []);
 table.parentElement = dialog;
 const wrapper = new Element();
 dialog.parentElement = wrapper;
+const queryForm = new Element("", (selector) => ["[name=\"settDateBegin\"]", "[name=\"settDateEnd\"]"].includes(selector) ? [new Element()] : []);
 const launch = new Element("下载暂存列表", undefined, () => { opened = true; opens += 1; size = 5; page = 1; });
 launch.getClientRects = () => buttonDelay-- > 0 ? [] : [1];
 let resourceEntries = [{ name: "/uisportal/accountCheckDetailQry/selectDeailBillList", startTime: 1, responseEnd: 2, responseStatus: 200 }];
@@ -92,7 +93,8 @@ const context = vm.createContext({
   document: {
     // 背景/残留文字不得被当成仍打开的下载列表。
     body: new Element(() => `${dialog.innerText} ${rows[0].innerText}`),
-    querySelectorAll: (selector) => selector === "button#download" ? [launch]
+    querySelectorAll: (selector) => selector === "form" ? [queryForm]
+      : selector === "button#download" ? [launch]
       : selector === ".loadSave-row" ? [dialog]
       : selector.includes('[role="dialog"]') ? [dialog] : []
   }
