@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-async function scenario({duplicate = false, label = '关闭', text = '申请已提交', stuck = false, synchronous = false, otherDialog = false, initiallyClosed = false} = {}) {
+async function scenario({duplicate = false, label = '关闭', text = '申请已提交', stuck = false, synchronous = false, otherDialog = false, initiallyClosed = false, lingeringDom = false} = {}) {
   let timerCalls = 0, clicks = 0, outsideClicks = 0, disconnected = false, timerCleared = false;
   class Element {
     constructor(text = '') { this.textContent = text; this.open = true; }
@@ -10,9 +10,14 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
     querySelectorAll() { return []; }
   }
   const dialog = new Element(text);
+  const wrapper = {__vue__:{visible:!initiallyClosed}};
+  dialog.closest = selector => selector.includes('message-box__wrapper') ? wrapper : null;
   if (initiallyClosed) dialog.open = false;
   const button = new Element(label);
-  button.click = () => { clicks++; if (synchronous) dialog.open = false; };
+  button.click = () => {
+    clicks++;
+    if (synchronous) { dialog.open = false; wrapper.__vue__.visible = false; }
+  };
   dialog.querySelectorAll = selector => selector === 'button' ? [button] : [];
   const outside = new Element(label);
   outside.click = () => { outsideClicks++; };
@@ -22,7 +27,11 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
     constructor(callback) { this.callback = callback; }
     observe() {
       // 即使后台短计时器没有运行，DOM 关闭事件仍必须完成操作。
-      if (!stuck) Promise.resolve().then(() => { dialog.open = false; this.callback(); });
+      if (!stuck) Promise.resolve().then(() => {
+        wrapper.__vue__.visible = false;
+        if (!lingeringDom) dialog.open = false;
+        this.callback();
+      });
     }
     disconnect() { disconnected = true; }
   }
@@ -55,6 +64,8 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
   assert.equal(delayed.disconnected, true);
   assert.equal(delayed.timerCleared, true);
   assert.equal(delayed.clicks, 1);
+  const lingering = await scenario({lingeringDom:true});
+  assert.equal(lingering.result.status, 'closed', 'closed Vue state must win over a lingering leave-animation DOM');
   const stuck = await scenario({stuck: true});
   assert.equal(stuck.result.status, 'blocked');
   assert.equal(stuck.timerCalls, 1);

@@ -115,9 +115,10 @@ async function incompleteDownloads(mode) {
   await assert.rejects(context.CHINAUMS_DOWNLOAD_RUNNER.run({
     reportType: 'trade-audit', merchantNo, gate: {allowed: true, merchantNo},
     startedAt: new Clock(now - 6 * 24 * 60 * 60 * 1000).toISOString(),
-    submittedMonths: [{month: month.key, remoteFileName: fileName, submittedAt: new Clock().toISOString()}],
+    submittedMonths: [{month: month.key, remoteFileName: fileName, remoteTaskId: 'task-1', submittedAt: new Clock().toISOString()}],
     checkpoint: async () => {}, sleep: async ms => {now += ms;}, transition: async () => {},
     invoke: async operation => {
+      if (operation === 'snapshotExportTasks') return {status:'found', rows:[{id:'task-1', fileName, statusCode:'ready', exportStatus:'02', exportStatusDesc:'成功'}]};
       if (operation === 'openDownloadList') return {status: 'clicked'};
       if (operation === 'parseDownloadTasks') return {status: 'found', page: 1, hasNext: mode === 'unknown-pagination' ? undefined : true,
         rows: [{fileName, createdAt: '2026-09-30 12:00:01', statusCode: 'ready', downloadEnabled: true}]};

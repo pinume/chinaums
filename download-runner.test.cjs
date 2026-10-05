@@ -32,6 +32,7 @@ async function check(failure) {
       ...(progressive ? [{ month: "2026-08", submittedAt: "2026-09-30T03:59:00.000Z",
         remoteFileName: fileName, downloadedFileName: failure === "resume" ? fileName : null }] : []),
       { month: "2026-09", remoteFileName: ["fallback", "fallback-ambiguous"].includes(failure) ? null : progressive ? secondFile : fileName,
+        remoteTaskId: trade ? "task-1" : null,
         submittedAt: ["fallback", "fallback-ambiguous"].includes(failure)
           ? new Date(new Date(2026, 8, 30, 12, 0, 1).getTime()).toISOString() : "2026-09-30T04:00:00.000Z" }
     ],
@@ -54,6 +55,10 @@ async function check(failure) {
       switch (operation) {
         case "query":
         case "queryState": throw new Error("Refreshing the download list must not rerun the transaction query");
+        case "snapshotExportTasks":
+          if (!trade) throw new Error("account detail must not poll trade task API");
+          assert.deepEqual(args.taskIds, ["task-1"]);
+          return { status: "found", rows: [{ id: "task-1", fileName, statusCode: "ready", exportStatus: "02", exportStatusDesc: "成功" }] };
         case "setDownloadPageSize": return { status: "unchanged" };
         case "openDownloadList":
           opens += 1;
@@ -77,7 +82,7 @@ async function check(failure) {
           if (closing && failure === "slow-close") now += 6000;
           if (closing && !["stuck", "retry-close"].includes(failure) && ++closeReads >= (failure === "slow-close" ? 1 : 2)) { opened = false; closing = false; }
           if (!opened) return { status: "not_found" };
-          const generated = failure === "long-generation" ? now - startedWaitingAt >= 180000 : opens >= 2;
+          const generated = trade ? true : failure === "long-generation" ? now - startedWaitingAt >= 180000 : opens >= 2;
           return {
             status: "found", page: 1, total: progressive ? 2 : 1, hasNext: false,
             rows: [{ fileName, createdAt: "2026-09-30 12:00:01",
@@ -90,7 +95,7 @@ async function check(failure) {
           assert.equal(awaitingCompletion, false, "must confirm the previous download before clicking again");
           awaitingCompletion = true;
           if (failure === "long-generation") assert(now - startedWaitingAt >= 180000);
-          else assert.equal(opens, failure === "progressive" && args.fileName === fileName ? 1 : 2);
+          else assert.equal(opens, trade ? 1 : failure === "progressive" && args.fileName === fileName ? 1 : 2);
           assert.equal(closing, false);
           assert(!clickedFiles.includes(args.fileName), "must not click a file twice");
           clickedFiles.push(args.fileName);
@@ -130,9 +135,10 @@ async function check(failure) {
     if (failure === "progressive") assert(calls.indexOf("downloadTask") < calls.indexOf("closeDownloadList"));
     const closeIndex = calls.indexOf("closeDownloadList");
     if (failure === "retry-close") {
-      assert.deepEqual(calls.slice(closeIndex, closeIndex + 8), ["closeDownloadList", "parseDownloadTasks",
+      assert.deepEqual(calls.slice(closeIndex), ["closeDownloadList", "parseDownloadTasks",
         "closeDownloadList", "parseDownloadTasks", "closeDownloadList", "parseDownloadTasks",
-        "closeDownloadList", "openDownloadList"]);
+        "closeDownloadList"]);
+      assert.equal(opens, 1, "trade download list must not reopen after API readiness");
     } else {
       const expected = ["closeDownloadList",
         ...(failure === "already-closed" ? [] : failure === "slow-close" ? ["parseDownloadTasks"] : ["parseDownloadTasks", "parseDownloadTasks"]),
