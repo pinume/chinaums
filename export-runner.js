@@ -181,7 +181,9 @@ const transition = async (event) => {
       : `${month}：等待申请名额，本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成。`,
     NO_DATA: `${month}：明确返回无数据，跳过空文件。`,
     SUBMITTED: `${month}：申请已被服务器接受。`,
-    WAITING_GENERATION: `已识别本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已生成且尚未下载；列表状态 ${event.listStatus || "unknown"}，当前页读到 ${event.parsedRows ?? 0} 行；过滤：文件名或商户号 ${event.rejected?.fileName ?? 0}，时间格式 ${event.rejected?.createdAt ?? 0}，非本轮任务 ${event.rejected?.beforeRun ?? 0}。稍后重开列表更新状态。`,
+    WAITING_GENERATION: event.listStatus === "api"
+      ? `暂存接口已匹配本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已确认生成成功；继续通过接口检查，不打开下载暂存列表。`
+      : `已识别本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已生成且尚未下载；列表状态 ${event.listStatus || "unknown"}，当前页读到 ${event.parsedRows ?? 0} 行；过滤：文件名或商户号 ${event.rejected?.fileName ?? 0}，时间格式 ${event.rejected?.createdAt ?? 0}，非本轮任务 ${event.rejected?.beforeRun ?? 0}。稍后重开列表更新状态。`,
     DOWNLOAD_REQUESTED: `${month || "本轮任务"}：已通过行内检查并触发下载。`,
     DOWNLOAD_COMPLETED: `${month || "本轮任务"}：Chrome 已确认文件下载完成，立即继续下载已生成文件。`,
     DOWNLOAD_REQUESTS_SENT: "本轮所有文件均已由 Chrome 确认下载完成。"
@@ -189,7 +191,9 @@ const transition = async (event) => {
   if (messages[status]) appendLog(messages[status]);
   if (status === "WAITING_GENERATION") {
     const seconds = Math.floor((event.waitedMs || 0) / 1000);
-    state.stage = `等待服务器生成：已等待 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒，剩余 ${event.remaining ?? event.expected ?? 0} 个文件未下载；约每 10 秒检查一次，可暂停或停止。`;
+    state.stage = event.listStatus === "api"
+      ? `等待服务器生成：已等待 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒，剩余 ${event.remaining ?? event.expected ?? 0} 个任务未确认成功；约每 10 秒查询一次接口，可暂停或停止。`
+      : `等待服务器生成：已等待 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒，剩余 ${event.remaining ?? event.expected ?? 0} 个文件未下载；约每 10 秒检查一次，可暂停或停止。`;
   }
   renderState();
   await saveState();
