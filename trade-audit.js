@@ -579,6 +579,7 @@
               return {
                 id: String(row.id || ""),
                 fileName: row.exportFileName,
+                createdAt: String(row.createTime || ""),
                 exportStatus,
                 exportStatusDesc,
                 errorMsg,
