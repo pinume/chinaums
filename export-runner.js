@@ -366,8 +366,16 @@ const navigateToReport = async () => {
   let inspection;
   while (activeNow() < deadline) {
     inspection = await invoke(reportType, "inspect", {});
+    if (reportType === "account-detail" && inspection?.downloadListOpen === true) {
+      const closed = await invoke(reportType, "closeDownloadList", {});
+      if (closed?.status !== "closed") {
+        throw new Error("检测到原先打开的下载暂存列表，但无法安全关闭；尚未开始本轮查询。");
+      }
+      appendLog("已关闭原先打开的下载暂存列表，准备继续月度查询。");
+      await sleep(200);
+      continue;
+    }
     if (inspection?.status === "ready" && inspection.hasQuery) return;
-    if (reportType === "account-detail" && inspection?.downloadListOpen === true) return;
     await sleep(400);
   }
   throw new Error(`${reportType === "trade-audit" ? "以旧换新采集2026" : "对账明细"}页控件未就绪（${inspection?.status || "无返回状态"}）：${inspection?.reason || "未找到可用查询入口"}`);
@@ -583,17 +591,7 @@ const run = async () => {
 
   await navigateToReport();
   if (await closeExistingSubmitNotice()) appendLog("已关闭上次遗留的申请提示，开始本轮月份查询。");
-  if (reportType === "account-detail") {
-    const inspection = await invoke(reportType, "inspect", {});
-    if (inspection?.downloadListOpen === true) {
-      const preexistingList = await invoke(reportType, "closeDownloadList", {});
-      if (preexistingList?.status !== "closed") {
-        throw new Error("检测到原先打开的下载暂存列表，但无法安全关闭；尚未开始本轮查询。");
-      }
-      appendLog("已关闭原先打开的下载暂存列表，准备继续月度查询。");
-      await navigateToReport();
-    }
-  } else {
+  if (reportType === "trade-audit") {
     const preexistingList = await invoke(reportType, "closeDownloadList", {});
     if (!new Set(["closed", "already_closed"]).has(preexistingList?.status)) {
       throw new Error("当前下载暂存列表状态无法自动关闭；尚未开始本轮查询。");
