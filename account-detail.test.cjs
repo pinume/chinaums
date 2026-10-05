@@ -3,23 +3,15 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 let opened = false;
-let opens = 0;
-let page = 1;
-let size = 5;
-let buttonDelay = 0;
+let closeClicks = 0;
 let snapshotCalls = 0;
-let snapshotReadyAfter = Infinity;
-const downloads = [];
-const directDownloads = [];
-const pageSizes = [];
-const today = new Date();
-const stamp = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
-const dateText = `${stamp.slice(0, 4)}/${stamp.slice(4, 6)}/${stamp.slice(6, 8)}`;
-const merchantNo = "89813015722APT1";
 
 class Element {
   constructor(text = "", query = () => [], click = () => {}) {
-    this.text = text; this.query = query; this.click = click;
+    this.text = text;
+    this.query = query;
+    this.click = click;
+    this.parentElement = null;
     this.classList = { contains: () => false };
   }
   get innerText() { return typeof this.text === "function" ? this.text() : this.text; }
@@ -32,133 +24,101 @@ class Element {
   contains(element) { return element !== this; }
 }
 
-const rows = Array.from({ length: 35 }, (_, index) => {
-  const fileName = `${merchantNo}_MX_${stamp}0000${String(35 - index).padStart(2, "0")}.xlsx`;
-  const button = new Element("下载", undefined, () => {
-    assert(!downloads.includes(fileName)); downloads.push(fileName);
-  });
-  Object.defineProperty(button, "disabled", { get: () => false });
-  const cells = [new Element(`${dateText} 00:00:${String(35 - index).padStart(2, "0")}`),
-    new Element(fileName), new Element(() => button.disabled ? "排队中" : "已生成"), new Element("下载")];
-  return new Element(() => cells.map((cell) => cell.innerText).join(" "),
-    (selector) => selector === "th,td" || selector === "td" ? cells : selector.includes("div.pwedDown") ? [button] : []);
-});
-const select = new Element("5 20 50");
-select.options = [5, 20, 50].map((number) => ({ text: String(number), value: String(number) }));
-Object.defineProperty(select, "value", { get: () => String(size), set: (value) => { size = Number(value); } });
-select.dispatchEvent = () => { pageSizes.push(size); page = 1; };
-const navigation = [new Element("首页", undefined, () => { page = 1; }),
-  new Element("上一页", undefined, () => { page -= 1; }), new Element("下一页", undefined, () => { page += 1; })];
+const form = new Element("", (selector) =>
+  ["[name=\"settDateBegin\"]", "[name=\"settDateEnd\"]"].includes(selector) ? [new Element()] : []
+);
 const close = new Element("×", undefined, () => {
+  closeClicks += 1;
   opened = false;
-  buttonDelay = 2;
 });
-const dialog = new Element(() => `申请下载 每页 ${size} 条 第${page}页 / 第${Math.ceil(rows.length / size)}页 共35条`,
-  (selector) => selector === "select.page-size-select" ? [select]
-    : selector === "table#downloadList" ? [table]
-    : selector === "table tr" ? rows.slice((page - 1) * size, page * size)
-    : selector === ".placeLoad-header .close-Load" ? [close]
-    : selector.includes("span#first") ? navigation
-    : selector === "#first" ? [navigation[0]] : selector === "#next" ? [navigation[2]] : []);
 const header = new Element("", (selector) => selector === "th,td"
-  ? ["请求时间", "文件名", "下载状态", "操作"].map((text) => new Element(text)) : []);
+  ? ["请求时间", "文件名", "下载状态", "操作"].map((text) => new Element(text))
+  : []);
 const table = new Element("", (selector) => selector === "tr" ? [header] : []);
-table.parentElement = dialog;
+const dialog = new Element("", (selector) => selector === "table#downloadList" ? [table]
+  : selector === ".placeLoad-header .close-Load" ? [close] : []);
 const wrapper = new Element();
+table.parentElement = dialog;
 dialog.parentElement = wrapper;
-const queryForm = new Element("", (selector) => ["[name=\"settDateBegin\"]", "[name=\"settDateEnd\"]"].includes(selector) ? [new Element()] : []);
-const launch = new Element("下载暂存列表", undefined, () => { opened = true; opens += 1; size = 5; page = 1; });
-launch.getClientRects = () => buttonDelay-- > 0 ? [] : [1];
-let resourceEntries = [{ name: "/uisportal/accountCheckDetailQry/selectDeailBillList", startTime: 1, responseEnd: 2, responseStatus: 200 }];
-const snapshotRows = () => rows.slice(0, 12).map((row, index) => ({
-  export_id: `remote-${index + 1}`,
-  file_name: row.querySelectorAll("td")[1].innerText,
-  task_status: index === 0 && snapshotCalls < snapshotReadyAfter ? "10" : "30"
-}));
+
+const merchantNo = "89813015722APT1";
+const snapshotRows = [
+  {
+    export_id: "remote-1",
+    file_name: `${merchantNo}_MX_20261005120001.xlsx`,
+    apply_date: "2026/10/05 12:00:01",
+    task_status: "10"
+  },
+  {
+    export_id: "remote-2",
+    file_name: `${merchantNo}_MX_20261005120002.xlsx`,
+    apply_date: "2026/10/05 12:00:02",
+    task_status: "30"
+  }
+];
+
 const context = vm.createContext({
-  Element, Event, Date, AbortController, setTimeout, clearTimeout,
+  Element,
+  Date,
+  AbortController,
+  setTimeout,
+  clearTimeout,
+  location: { hostname: "service.chinaums.com", pathname: "/uisportal/accountCheckDetailQry/toDetail" },
+  getComputedStyle: (element) => ({
+    display: "block",
+    visibility: "visible",
+    opacity: element === wrapper && !opened ? "0" : "1"
+  }),
+  document: {
+    body: new Element(),
+    documentElement: new Element(),
+    querySelectorAll(selector) {
+      if (selector === "form") return [form];
+      if (selector === ".loadSave-row") return [dialog];
+      return [];
+    }
+  },
   fetch: async () => {
     snapshotCalls += 1;
     return {
       ok: true,
       json: async () => ({
         respCode: "000000",
-        list: { content: snapshotRows(), totalPages: 35, totalElements: 175 }
+        list: { content: snapshotRows, totalPages: 1, totalElements: snapshotRows.length }
       })
     };
-  },
-  performance: { now: () => 0, getEntriesByType: () => resourceEntries },
-  getComputedStyle: (element) => ({ display: "block", visibility: "visible", opacity: element === wrapper && !opened ? "0" : "1" }),
-  location: { hostname: "service.chinaums.com", pathname: "/uisportal/accountCheckDetailQry/toDetail" },
-  document: {
-    // 背景/残留文字不得被当成仍打开的下载列表。
-    body: new Element(() => `${dialog.innerText} ${rows[0].innerText}`),
-    querySelectorAll: (selector) => selector === "form" ? [queryForm]
-      : selector === "button#download" ? [launch]
-      : selector === ".loadSave-row" ? [dialog]
-      : selector.includes('[role="dialog"]') ? [dialog] : []
   }
 });
-for (const file of ["account-detail.js", "download-runner.js"]) {
-  vm.runInContext(fs.readFileSync(`${__dirname}/${file}`, "utf8"), context);
-}
+vm.runInContext(fs.readFileSync(`${__dirname}/account-detail.js`, "utf8"), context);
 
 (async () => {
   const adapter = context.__chinaumsAccountDetailAdapter;
+
+  let inspection = await adapter("inspect");
+  assert.equal(inspection.status, "ready");
+  assert.equal(inspection.downloadListOpen, false);
+
+  opened = true;
+  inspection = await adapter("inspect");
+  assert.equal(inspection.downloadListOpen, true);
+  assert.equal((await adapter("closeDownloadList")).status, "closed");
+  assert.equal(closeClicks, 1);
   assert.equal((await adapter("inspect")).downloadListOpen, false);
+  assert.equal((await adapter("closeDownloadList")).status, "already_closed");
+  assert.equal(closeClicks, 1);
+
   const snapshot = await adapter("snapshotExportTasks", { taskIds: ["remote-1", "remote-2"] });
-  assert.equal(snapshotCalls, 1, "target task IDs on the first page must stop historical pagination");
+  assert.equal(snapshotCalls, 1);
   assert.deepEqual(Array.from(snapshot.rows, (row) => row.statusCode), ["pending", "ready"]);
   assert.deepEqual(Array.from(snapshot.rows, (row) => row.taskStatus), ["10", "30"]);
-  const invoke = async (operation, args) => {
-    const result = await adapter(operation, args);
-    if (operation !== "parseDownloadTasks" || result.status !== "loading") return result;
-    await new Promise((resolve) => setTimeout(resolve, 510));
-    return adapter(operation, args);
-  };
-  resourceEntries[0].startTime = -1;
-  await invoke("openDownloadList");
-  assert.equal((await adapter("inspect")).downloadListOpen, true);
-  assert.equal((await adapter("parseDownloadTasks")).status, "loading", "old request cannot validate retained rows");
-  resourceEntries[0].startTime = 1;
-  assert.equal((await adapter("parseDownloadTasks")).status, "loading", "fresh response still waits for stable content");
-  assert.equal((await invoke("parseDownloadTasks")).hasNext, true);
-  await invoke("nextDownloadPage");
-  resourceEntries[0].responseStatus = 503;
-  assert.equal((await adapter("parseDownloadTasks")).status, "refresh_error");
-  resourceEntries[0].responseStatus = 200;
-  assert.equal((await invoke("parseDownloadTasks")).page, 2);
-  await invoke("selectDownloadPage", { page: 1 });
-  assert.equal(page, 1);
-  opens = 0; opened = false;
-  snapshotReadyAfter = snapshotCalls + 2;
-  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 24);
-  const result = await context.CHINAUMS_DOWNLOAD_RUNNER.run({
-    invoke: async (operation, args) => {
-      if (operation === "downloadTaskDirect") {
-        assert.equal(args.taskId, `remote-${directDownloads.length + 1}`);
-        directDownloads.push(args.fileName);
-        return { status: "download_requested" };
-      }
-      if (operation === "confirmDownload") {
-        assert(directDownloads.includes(args.fileName));
-        return { status: "download_completed", downloadId: directDownloads.length };
-      }
-      return invoke(operation, args);
-    }, reportType: "account-detail", merchantNo, startedAt: start.toISOString(),
-    submittedMonths: Array.from({ length: 12 }, (_, index) => ({ month: `2026-${index + 1}`,
-      remoteFileName: rows[index].querySelectorAll("td")[1].innerText, remoteTaskId: `remote-${index + 1}`, submittedAt: start.toISOString() })),
-    gate: { allowed: true, merchantNo }, checkpoint: async () => {}, sleep: async () => {}, transition: async () => {}
-  });
-  assert.equal(result.length, 12);
-  assert.equal(directDownloads.length, 12);
-  assert.equal(downloads.length, 0, "direct runner must not click download-list rows");
-  assert.deepEqual(pageSizes, []);
-  assert.equal(opens, 0, "account direct download must not open the download list");
-  assert.equal(snapshotCalls, 3, "account generation waits through the task API before direct downloads");
-  assert.equal(opened, false);
-  assert.equal((await invoke("parseDownloadTasks")).status, "not_found");
-  assert.equal(page, 1);
-  console.log("PASS: account task API maps 10/30, waits for ready, then downloads exact task IDs without opening the list");
-})().catch((error) => { console.error(error); process.exitCode = 1; });
 
+  for (const operation of [
+    "openDownloadList", "parseDownloadTasks", "setDownloadPageSize",
+    "nextDownloadPage", "selectDownloadPage", "downloadTask"
+  ]) {
+    assert.equal((await adapter(operation, {})).status, "unknown_operation",
+      `${operation} should stay deleted after direct-download migration`);
+  }
+
+  console.log("PASS: account startup only closes a truly open old list, task snapshots use the API, and removed list operations stay dead");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
