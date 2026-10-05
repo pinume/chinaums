@@ -128,7 +128,7 @@ async function incompleteDownloads(mode) {
       if (operation === 'closeDownloadList') return {status: 'already_closed'};
       throw new Error(operation);
     }
-  }), /接口已确认.*暂存列表未显示全部任务为可下载状态/);
+  }), /暂存文件保留期限/);
   assert.equal(downloads, 0, 'an incomplete scan must not download even when all expected files appear on the first page');
 }
 
