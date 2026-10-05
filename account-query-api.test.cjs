@@ -83,12 +83,15 @@ const context = vm.createContext({
     }
     const pageNumber = Number(payload.get("pageNumber"));
     const count = pageNumber === 1 ? 5 : 2;
+    const rows = mode === "duplicate-page" && pageNumber === 2
+      ? makeRows(1, 2)
+      : makeRows(pageNumber, count);
     return { ok: true, status: 200, json: async () => ({
       respCode: "000000",
       respDesc: "通用对账明细查询成功",
       summary: { count: 7 },
       pageObj: {
-        content: makeRows(pageNumber, count),
+        content: rows,
         totalPages: 2,
         totalElements: 7,
         number: pageNumber - 1,
@@ -132,6 +135,12 @@ vm.runInContext(fs.readFileSync(`${__dirname}/account-detail.js`, "utf8"), conte
   state = await adapter("queryState");
   assert.equal(state.status, "failed");
   assert.match(state.reason, /唯一商户号/);
+
+  mode = "duplicate-page";
+  await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" });
+  await adapter("query", { operationDeadline: Date.now() + 10000 });
+  state = await adapter("queryState");
+  assert.equal(state.status, "failed", "repeated page content must not prove a complete account query");
 
   mode = "bad-date";
   await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" });
