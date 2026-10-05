@@ -83,9 +83,10 @@ async function monthly(mode) {
       reconciles++;
       assert(savedAttempt);
       assert.equal(args.targetMerchantNo, merchantNo);
+      assert(Array.isArray(args.baselineRows));
       if (mode === 'stop-reconcile') throw new Error('STOPPED_BY_USER');
-      if (mode === 'reconcile-error') throw new Error('list timeout');
-      return {status: 'accepted', fileName};
+      if (mode === 'reconcile-error') throw new Error('snapshot timeout');
+      return {status: 'accepted', fileName, taskId:'20260930120002681550426941423616'};
     },
     invoke: async operation => {
       if (operation === 'setDateRange') return {status: 'set'};
@@ -124,6 +125,9 @@ async function monthly(mode) {
     const results = await result;
     assert.equal(results[0].status, 'SUBMITTED');
     assert.equal(results[0].remoteFileName, fileName);
+    if (['submit-timeout', 'response-timeout'].includes(mode)) {
+      assert.equal(results[0].remoteTaskId, '20260930120002681550426941423616');
+    }
     assert.equal(submits, 1);
   }
   assert.equal(reconciles, ['submit-timeout', 'response-timeout', 'reconcile-error', 'stop-reconcile'].includes(mode) ? 1 : 0);
