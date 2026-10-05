@@ -322,7 +322,24 @@
       if (reopened?.status !== "clicked") {
         throw new Error(`无法重新打开暂存列表以更新任务状态（${reopened?.status || "无返回状态"}）：${reopened?.reason || "页面操作未能确认"}；已停止自动下载。`);
       }
-      await waitForDownloadList(false);
+      while (!await waitForDownloadList(false)) {
+        if (Date.now() >= generationDeadline) {
+          throw new Error("本轮任务未能在暂存文件保留期限前全部生成；自动流程停止，请手动核对。 ");
+        }
+        if (lastList?.status === "refresh_error") {
+          scanFailures += 1;
+          if (scanFailures >= 3) {
+            throw new Error(`暂存列表连续 3 次刷新读取失败（${lastList?.reason || lastList?.status || "unknown"}）；已提交任务保留，禁止重提。`);
+          }
+        }
+        await transition({ status: "WAITING_GENERATION", found: associatedByFile.size, ready: readyCount, expected: expectedCount,
+          waitedMs: now() - generationWaitStartedAt, remaining: expectedCount - downloaded.size,
+          listStatus: lastList?.status || "unknown", parsedRows: lastList?.rows?.length || 0, rejected });
+        for (let second = 0; second < 10; second += 1) {
+          await checkpoint();
+          await sleep(1000);
+        }
+      }
     }
 
     await transition({ status: "DOWNLOAD_REQUESTS_SENT", count: associatedTasks.length });
