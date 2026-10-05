@@ -656,7 +656,7 @@
           return { status: "blocked", reason: "文件名中的商户号与当前目标不符。" };
         }
         const taskId = String(args.taskId || "");
-        if (!/^[A-Za-z0-9_-]{1,128}$/.test(taskId)) {
+        if (!/^[0-9a-f]{32}$/i.test(taskId)) {
           return { status: "blocked", reason: "暂存任务 ID 格式无效。" };
         }
         const frame = document.createElement("iframe");
