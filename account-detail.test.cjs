@@ -10,6 +10,7 @@ let buttonDelay = 0;
 let snapshotCalls = 0;
 let snapshotReadyAfter = Infinity;
 const downloads = [];
+const directDownloads = [];
 const pageSizes = [];
 const today = new Date();
 const stamp = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
@@ -130,9 +131,14 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 24);
   const result = await context.CHINAUMS_DOWNLOAD_RUNNER.run({
     invoke: async (operation, args) => {
+      if (operation === "downloadTaskDirect") {
+        assert.equal(args.taskId, `remote-${directDownloads.length + 1}`);
+        directDownloads.push(args.fileName);
+        return { status: "download_requested" };
+      }
       if (operation === "confirmDownload") {
-        assert(downloads.includes(args.fileName));
-        return { status: "download_completed", downloadId: downloads.length };
+        assert(directDownloads.includes(args.fileName));
+        return { status: "download_completed", downloadId: directDownloads.length };
       }
       return invoke(operation, args);
     }, reportType: "account-detail", merchantNo, startedAt: start.toISOString(),
@@ -141,13 +147,14 @@ for (const file of ["account-detail.js", "download-runner.js"]) {
     gate: { allowed: true, merchantNo }, checkpoint: async () => {}, sleep: async () => {}, transition: async () => {}
   });
   assert.equal(result.length, 12);
-  assert.equal(downloads.length, 12);
-  assert.deepEqual(pageSizes, [20]);
-  assert.equal(opens, 1, "account download list opens only after the API reports every task ready");
-  assert.equal(snapshotCalls, 3, "account generation waits through the task API before opening the list");
+  assert.equal(directDownloads.length, 12);
+  assert.equal(downloads.length, 0, "direct runner must not click download-list rows");
+  assert.deepEqual(pageSizes, []);
+  assert.equal(opens, 0, "account direct download must not open the download list");
+  assert.equal(snapshotCalls, 3, "account generation waits through the task API before direct downloads");
   assert.equal(opened, false);
   assert.equal((await invoke("parseDownloadTasks")).status, "not_found");
-  assert.equal(page, 1, "no need to scan historical pages once all current tasks are found");
-  console.log("PASS: account task API maps 10/30, waits before one UI open, paginates exact files and closes once");
+  assert.equal(page, 1);
+  console.log("PASS: account task API maps 10/30, waits for ready, then downloads exact task IDs without opening the list");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 
