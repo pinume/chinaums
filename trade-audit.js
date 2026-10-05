@@ -18,139 +18,16 @@
     location.pathname.replace(/\/+$/, "") === ROUTE && location.hash.includes("/auditOfTrade2026");
   const downloadGateAllowed = (args) => args.gate?.allowed === true &&
     args.gate.merchantNo === args.targetMerchantNo && Boolean(args.targetMerchantNo);
-  const tradeDateInput = () => {
-    const matches = [...document.querySelectorAll("input.deal-date")]
-      .filter((input) => visible(input) && !input.disabled);
-    if (matches.length !== 1) {
-      return { error: `交易日期输入框识别异常：可用输入框 ${matches.length} 个。` };
-    }
-    return { input: matches[0] };
-  };
-  const exactButton = (label) => {
-    const matches = [...document.querySelectorAll("button")]
-      .filter(visible)
-      .filter((element) => normalize(textOf(element)) === normalize(label));
-    return matches.length === 1 && !matches[0].disabled ? matches[0] : null;
-  };
-  const findCalendar = () => {
-    const matches = [...document.querySelectorAll(".layui-laydate")].filter(visible);
-    return matches.length === 1 ? matches[0] : null;
-  };
-  const openCalendar = async (input) => {
-    let calendar = findCalendar();
-    if (calendar) return calendar;
-    input.blur();
-    input.focus();
-    if (!findCalendar()) input.dispatchEvent(new Event("focus"));
-    if (!findCalendar()) input.click();
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      calendar = findCalendar();
-      if (calendar) return calendar;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    return findCalendar();
-  };
-  const monthFromPanel = (panel) => {
-    const text = textOf(panel.querySelector(".laydate-set-ym"));
-    const match = text.match(/(\d{4})\s*年\s*(\d{1,2})\s*月/);
-    return match ? { year: Number(match[1]), month: Number(match[2]) } : null;
-  };
-  const monthKey = ({ year, month }) => year * 12 + month - 1;
-  const readCalendar = (calendar) => [...calendar.querySelectorAll(".layui-laydate-main")]
-    .filter(visible)
-    .map((panel) => ({ panel, month: monthFromPanel(panel) }))
-    .filter((item) => item.month);
-  const moveCalendarToMonth = async (calendar, year, month) => {
-    const targetKey = monthKey({ year, month });
-    for (let attempt = 0; attempt < 24; attempt += 1) {
-      const panels = readCalendar(calendar);
-      if (!panels.length) return false;
-      if (panels.some((item) => monthKey(item.month) === targetKey)) return true;
-      const firstKey = monthKey(panels[0].month);
-      const lastKey = monthKey(panels[panels.length - 1].month);
-      const direction = targetKey < firstKey ? "prev" : targetKey > lastKey ? "next" : "none";
-      if (direction === "none") return false;
-      const panel = direction === "prev" ? panels[0].panel : panels[panels.length - 1].panel;
-      const control = [...panel.querySelectorAll(`.laydate-${direction}-m`)]
-        .filter((element) => visible(element) && !element.classList.contains("laydate-disabled"));
-      if (control.length !== 1) return false;
-      control[0].click();
-      await new Promise((resolve) => setTimeout(resolve, 40));
-    }
-    return false;
-  };
-  const selectDay = (calendar, year, month, day) => {
-    const match = readCalendar(calendar).find((item) =>
-      item.month.year === year && item.month.month === month
-    );
-    if (!match) return false;
-    const cells = [...match.panel.querySelectorAll(".layui-laydate-content td")]
-      .filter(visible)
-      .filter((cell) => !cell.classList.contains("laydate-day-prev") && !cell.classList.contains("laydate-day-next") && !cell.classList.contains("laydate-disabled"))
-      .filter((cell) => normalize(textOf(cell)) === String(day));
-    if (cells.length !== 1) return false;
-    cells[0].click();
-    return true;
-  };
-  const parseDate = (value) => {
+  const compactDate = (value) => {
     const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return match ? { year: Number(match[1]), month: Number(match[2]), day: Number(match[3]) } : null;
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(year, month - 1, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+    return `${match[1]}${match[2]}${match[3]}`;
   };
-  const localDate = ({ year, month, day }) => `${year}/${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}`;
-  const normalizeRangeValue = (value) => normalize(String(value || "").replace(/-/g, "/"));
-  const resultCount = () => {
-    const match = textOf(document.body).match(/根据查询条件共查询到\s*([\d,]+)\s*条(?:记录)?/);
-    return match ? Number(match[1].replace(/,/g, "")) : null;
-  };
-  const querySignature = () => {
-    const rows = [...document.querySelectorAll(".el-table__body-wrapper tbody > tr")]
-      .filter(visible)
-      .map((row) => textOf(row))
-      .slice(0, 3);
-    const empty = [...document.querySelectorAll(".el-table__empty-text,.el-empty__description")]
-      .filter(visible)
-      .map(textOf)
-      .join("|");
-    return JSON.stringify({ count: resultCount(), rows, empty });
-  };
-  const queryBusy = () => {
-    const buttons = [...document.querySelectorAll("button")]
-      .filter(visible)
-      .filter((element) => normalize(textOf(element)) === "查询");
-    const button = buttons.length === 1 ? buttons[0] : null;
-    return Boolean(
-      [...document.querySelectorAll(".el-loading-mask,.layui-layer-loading,.loading")].some(visible) ||
-      (button && (button.disabled || /查询中|加载中/.test(textOf(button))))
-    );
-  };
-  // Record short loading cycles and redraws even when the next poll sees identical results.
-  const observeQuery = (control) => {
-    const tracker = queryTracker;
-    if (typeof MutationObserver !== "function") return;
-    tracker.observer = new MutationObserver((records) => {
-      if (queryTracker !== tracker) return;
-      const loadingSelector = ".el-loading-mask,.layui-layer-loading,.loading";
-      if (queryBusy() || records.some((record) =>
-        (record.target instanceof Element && record.target.matches(loadingSelector)) ||
-        [...(record.addedNodes || []), ...(record.removedNodes || [])].some((node) =>
-          node instanceof Element && (node.matches(loadingSelector) || node.querySelector(loadingSelector))) ||
-        (record.target === control && record.attributeName === "disabled" && record.oldValue !== null))) {
-        tracker.observedLoading = true;
-        tracker.candidate = null;
-      }
-      if (records.some((record) => {
-        if (!["childList", "characterData"].includes(record.type)) return false;
-        const target = record.target instanceof Element ? record.target : record.target.parentElement;
-        const result = target?.closest(".el-table__body-wrapper,.el-table__empty-block,.el-table__empty-text,.el-empty__description");
-        return result && !result.closest(".el-dialog");
-      })) {
-        tracker.candidate = null;
-      }
-    });
-    tracker.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true,
-      attributes: true, attributeOldValue: true, attributeFilter: ["class", "style", "disabled"] });
-  };
-  const finishQueryObservation = () => queryTracker?.observer?.disconnect();
 
   const modalOpen = (dialog) => {
     const wrapper = dialog.closest?.(".el-message-box__wrapper,.el-dialog__wrapper");
@@ -198,12 +75,6 @@
     .filter((table) => !table.closest(".el-dialog"))
     .map((table) => table.__vue__?.$parent)
     .find((component) => component?.$options?.name === "table");
-  const queryMerchantIds = () => {
-    const rows = reportComponent()?.tableData;
-    if (!Array.isArray(rows) || !rows.length || rows.some((row) => !row.mchntId)) return [];
-    return [...new Set(rows.map((row) => normalize(row.mchntId)))];
-  };
-
   const downloadDialogComponent = (dialog) => {
     const instance = dialog.closest(".el-dialog__wrapper")?.__vue__;
     return [instance, instance?.$parent].find((component) => component?.$options?.name === "ElDialog");
@@ -223,120 +94,152 @@
       case "submitDialogState":
         return { status: dialogTexts().length === 0 ? "clear" : "visible" };
       case "inspect": {
-        const date = tradeDateInput();
+        const apiReady = Boolean(reportComponent()?.$axiosApi?.axiosPromisePara);
         return {
-          status: date.error ? "controls_missing" : "ready",
-          reason: date.error || (!exactButton("查询") ? "可用查询按钮缺失或不唯一。" : null),
-          dateValue: date.input?.value ?? null,
-          hasQuery: Boolean(exactButton("查询")),
+          status: apiReady ? "ready" : "controls_missing",
+          reason: apiReady ? null : "以旧换新查询接口不可用。",
+          hasQuery: apiReady,
           downloadListOpen: downloadDialogs().length > 0,
-          count: resultCount()
+          count: Number.isInteger(queryTracker?.count) ? queryTracker.count : null
         };
       }
       case "setDateRange": {
-        const start = parseDate(args.start);
-        const end = parseDate(args.end);
-        if (!start || !end || `${args.start}` > `${args.end}`) return { status: "failed", reason: "日期参数无效。" };
-        const date = tradeDateInput();
-        if (date.error) return { status: "failed", reason: date.error };
-        let calendar = await openCalendar(date.input);
-        if (!calendar) return { status: "failed", reason: "聚焦并点击交易日期后，3 秒内日历仍未出现。" };
-        if (!await moveCalendarToMonth(calendar, start.year, start.month)) {
-          return { status: "failed", reason: "未能将日期日历移动到目标起始月份。" };
+        const beginTransDate = compactDate(args.start);
+        const endTransDate = compactDate(args.end);
+        if (!beginTransDate || !endTransDate || beginTransDate > endTransDate) {
+          return { status: "failed", reason: "日期参数无效。" };
         }
-        calendar = findCalendar();
-        if (!calendar || !selectDay(calendar, start.year, start.month, start.day)) {
-          return { status: "failed", reason: "未能唯一定位目标起始日。" };
-        }
-        await new Promise((resolve) => setTimeout(resolve, 40));
-        calendar = findCalendar();
-        if (!calendar || !await moveCalendarToMonth(calendar, end.year, end.month)) {
-          return { status: "failed", reason: "未能将日期日历移动到目标结束月份。" };
-        }
-        calendar = findCalendar();
-        if (!calendar || !selectDay(calendar, end.year, end.month, end.day)) {
-          return { status: "failed", reason: "未能唯一定位目标结束日。" };
-        }
-        const confirm = [...calendar.querySelectorAll("span.laydate-btns-confirm")]
-          .filter((element) => visible(element) && !element.classList.contains("laydate-disabled"))
-          .filter((element) => normalize(textOf(element)) === "确定");
-        if (confirm.length !== 1) return { status: "failed", reason: "日期日历中的“确定”控件缺失或不唯一。" };
-        confirm[0].click();
-        await new Promise((resolve) => setTimeout(resolve, 60));
-        const updated = tradeDateInput();
-        const expected = normalizeRangeValue(`${localDate(start)}~${localDate(end)}`);
-        if (updated.error || normalizeRangeValue(updated.input.value) !== expected) {
-          return { status: "failed", reason: "日期控件显示范围与目标月份不一致，已停止。", value: updated.input?.value ?? null };
-        }
-        finishQueryObservation();
-        queryTracker = null;
-        return { status: "set", value: updated.input.value };
+        queryTracker = {
+          beginTransDate,
+          endTransDate,
+          resultState: "set",
+          count: null,
+          merchantId: null,
+          reason: null
+        };
+        return { status: "set", beginTransDate, endTransDate };
       }
       case "query": {
         if (dialogTexts().length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不启动下一次查询。" };
-        const control = exactButton("查询");
-        if (!control) return { status: "controls_missing", reason: "“查询”按钮缺失或不唯一。" };
-        const date = tradeDateInput();
-        if (date.error || !date.input.value.trim()) {
-          return { status: "failed", reason: date.error || "交易日期为空，未提交查询。" };
+        if (!queryTracker?.beginTransDate || !queryTracker?.endTransDate) {
+          return { status: "failed", reason: "查询日期尚未安全设置。" };
         }
-        finishQueryObservation();
-        queryTracker = {
-          dateValue: date.input.value,
-          baseline: querySignature(),
-          observedLoading: false,
-          candidate: null,
-          candidateSince: 0
+        const component = reportComponent();
+        if (!component?.$axiosApi?.axiosPromisePara) {
+          return { status: "controls_missing", reason: "以旧换新查询接口不可用。" };
+        }
+        const userPortalToken = localStorage.getItem("userPortalVerifyToken");
+        if (!userPortalToken) return { status: "blocked", reason: "页面登录令牌不可用，未提交查询。" };
+        const deadline = args.operationDeadline ?? Date.now() + 60000;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+        const checkDeadline = () => {
+          if (controller.signal.aborted || Date.now() >= deadline) {
+            controller.abort();
+            throw new Error("以旧换新查询已超过截止时间。");
+          }
         };
-        observeQuery(control);
-        control.click();
-        queryTracker.observedLoading ||= queryBusy();
-        return { status: "clicked" };
+        queryTracker.resultState = "querying";
+        try {
+          const rows = [];
+          let expectedTotal = null;
+          let expectedPages = null;
+          for (let current = 0; ; current += 1) {
+            checkDeadline();
+            const response = await component.$axiosApi.axiosPromisePara({
+              merOrderId: "",
+              transRef: "",
+              status: [],
+              beginTransDate: queryTracker.beginTransDate,
+              endTransDate: queryTracker.endTransDate,
+              current,
+              size: 10
+            }, "uis-tradein-server/portal/yjhx/v3/queryList", {
+              signal: controller.signal,
+              timeout: Math.max(1, deadline - Date.now()),
+              headers: { userPortalToken }
+            });
+            checkDeadline();
+            if (response?.success !== true || String(response.code ?? "") !== "000000" ||
+              !Array.isArray(response.data?.list)) {
+              throw new Error("以旧换新查询接口结构异常。");
+            }
+            const page = response.data;
+            const total = Number(page.total);
+            const pages = Number(page.pages);
+            const size = Number(page.size);
+            const returnedCurrent = Number(page.current);
+            if (!Number.isInteger(total) || total < 0 || !Number.isInteger(pages) || pages < 0 ||
+              size !== 10 || returnedCurrent !== current) {
+              throw new Error("以旧换新查询分页信息异常。");
+            }
+            expectedTotal ??= total;
+            expectedPages ??= pages;
+            if (total !== expectedTotal || pages !== expectedPages) {
+              throw new Error("以旧换新查询分页总数在读取过程中发生变化。");
+            }
+            rows.push(...page.list);
+            if (total === 0) {
+              if (current !== 0 || page.list.length !== 0) throw new Error("以旧换新空查询分页结构异常。");
+              break;
+            }
+            if (pages < 1 || current >= pages) throw new Error("以旧换新查询页数异常。");
+            if (current + 1 >= pages) break;
+          }
+          if (rows.length !== expectedTotal ||
+            rows.some((row) => !row?.id || !row?.mchntId || !/^\d{8}$/.test(String(row.transDate || ""))) ||
+            new Set(rows.map((row) => String(row.id))).size !== rows.length ||
+            rows.some((row) => String(row.transDate) < queryTracker.beginTransDate ||
+              String(row.transDate) > queryTracker.endTransDate)) {
+            throw new Error("以旧换新查询结果分页不完整或身份异常。");
+          }
+          if (expectedTotal === 0) {
+            Object.assign(queryTracker, { resultState: "no_data", count: 0, merchantId: null, reason: null });
+            return { status: "clicked", source: "api" };
+          }
+          const merchants = [...new Set(rows.map((row) => normalize(row.mchntId)).filter(Boolean))];
+          if (merchants.length !== 1) {
+            Object.assign(queryTracker, {
+              resultState: "failed",
+              count: expectedTotal,
+              merchantId: null,
+              reason: "查询结果没有唯一商户身份；未申请导出。"
+            });
+            return { status: "clicked", source: "api" };
+          }
+          Object.assign(queryTracker, {
+            resultState: "ready",
+            count: expectedTotal,
+            merchantId: merchants[0],
+            reason: null
+          });
+          return { status: "clicked", source: "api" };
+        } catch (error) {
+          Object.assign(queryTracker, {
+            resultState: "failed",
+            count: null,
+            merchantId: null,
+            reason: error?.name === "AbortError" ? "以旧换新查询接口在截止时间前未完成。" :
+              error?.message || "以旧换新查询接口调用失败。"
+          });
+          return { status: "clicked", source: "api" };
+        } finally {
+          clearTimeout(timer);
+        }
       }
       case "queryState": {
-        if (!queryTracker) return { status: "waiting" };
-        const date = tradeDateInput();
-        if (date.error || date.input.value !== queryTracker.dateValue) {
-          finishQueryObservation();
-          return { status: "failed", reason: "查询期间交易日期发生变化或无法确认。" };
+        if (!queryTracker || ["set", "querying"].includes(queryTracker.resultState)) return { status: "waiting" };
+        if (queryTracker.resultState === "failed") {
+          return { status: "failed", reason: queryTracker.reason || "以旧换新查询失败。" };
         }
-        if (queryBusy()) {
-          queryTracker.candidate = null;
-          queryTracker.observedLoading = true;
-          return { status: "waiting" };
-        }
-        const signature = querySignature();
-        if (!queryTracker.observedLoading && signature === queryTracker.baseline) {
-          return { status: "waiting" };
-        }
-        if (queryTracker.candidate !== signature) {
-          queryTracker.candidate = signature;
-          queryTracker.candidateSince = Date.now();
-          return { status: "waiting" };
-        }
-        if (Date.now() - queryTracker.candidateSince < 500) return { status: "waiting" };
-        const count = resultCount();
-        const currentResult = JSON.parse(signature);
-        const noDataText = [...document.querySelectorAll(".el-table__empty-text,.el-empty__description")]
-          .filter(visible)
-          .some((element) => /暂无数据/.test(textOf(element)) && !/请根据条件查询/.test(textOf(element)));
-        if (count === 0 || (count === null && noDataText)) {
-          queryTracker.resultState = "no_data";
-          finishQueryObservation();
-          return { status: "no_data", count: count ?? 0 };
-        }
-        if (count !== null && currentResult.rows.length > 0) {
-          const merchants = queryMerchantIds();
-          if (merchants.length !== 1 || (args.targetMerchantId && merchants[0] !== args.targetMerchantId)) {
-            finishQueryObservation();
-            return { status: "failed", reason: "查询结果没有唯一商户身份或与本轮商户不一致；未申请导出。" };
+        if (queryTracker.resultState === "no_data") return { status: "no_data", count: 0 };
+        if (queryTracker.resultState === "ready") {
+          if (args.targetMerchantId && queryTracker.merchantId !== args.targetMerchantId) {
+            return { status: "failed", reason: "查询结果的内部商户 ID 与本轮已确认身份不一致；未申请导出。" };
           }
-          queryTracker.resultState = "ready";
-          finishQueryObservation();
-          queryTracker.merchantId = merchants[0];
-          return { status: "ready", count, merchantId: merchants[0] };
+          return { status: "ready", count: queryTracker.count, merchantId: queryTracker.merchantId };
         }
-        return { status: "waiting" };
+        return { status: "failed", reason: "以旧换新查询结果状态无法识别。" };
       }
       case "submitExport": {
         if (dialogTexts().length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不申请导出。" };
@@ -344,21 +247,13 @@
         if (gate?.authentication?.status !== "logged_in" || gate.authentication.confidence !== "high") {
           return { status: "blocked", reason: "商户门禁未通过，不允许申请导出。" };
         }
-        if (queryTracker?.resultState !== "ready" || resultCount() === null) {
+        if (queryTracker?.resultState !== "ready" || !Number.isInteger(queryTracker.count) || queryTracker.count <= 0) {
           return { status: "blocked", reason: "查询结果未就绪，导出操作已锁定。" };
         }
-        const merchants = queryMerchantIds();
         if (gate?.allowed !== true || !args.targetMerchantId || gate.merchantId !== args.targetMerchantId ||
-          queryTracker.merchantId !== args.targetMerchantId || merchants.length !== 1 || merchants[0] !== args.targetMerchantId) {
+          queryTracker.merchantId !== args.targetMerchantId) {
           return { status: "blocked", reason: "当前商户身份无法确认或已切换；未申请导出。" };
         }
-        const date = tradeDateInput();
-        if (date.error || date.input.value !== queryTracker.dateValue) {
-          return { status: "blocked", reason: "申请导出前交易日期已变化或无法确认。" };
-        }
-        const range = normalizeRangeValue(queryTracker.dateValue)
-          .match(/^(\d{4})\/(\d{2})\/(\d{2})~(\d{4})\/(\d{2})\/(\d{2})$/);
-        if (!range) return { status: "blocked", reason: "已确认交易日期格式无法转换为导出参数。" };
         const component = reportComponent();
         if (!component?.$axiosApi?.axiosPromisePara) {
           return { status: "blocked", reason: "页面导出接口不可用，未申请导出。" };
@@ -372,8 +267,8 @@
             merOrderId: "",
             transRef: "",
             statusList: [],
-            beginTransDate: `${range[1]}${range[2]}${range[3]}`,
-            endTransDate: `${range[4]}${range[5]}${range[6]}`
+            beginTransDate: queryTracker.beginTransDate,
+            endTransDate: queryTracker.endTransDate
           }, "uis-tradein-server/portal/yjhx/v3/applyExport", {
             signal: AbortSignal.timeout(Math.max(1, Math.min(12000,
               (args.operationDeadline ?? Date.now() + 12000) - Date.now()))),
