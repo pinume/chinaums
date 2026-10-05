@@ -104,7 +104,9 @@ context.chrome = {
       return [{result: {status: "found", rows: [{createdAt: `${stamp.slice(0,4)}-${stamp.slice(4,6)}-${stamp.slice(6,8)} ${stamp.slice(8,10)}:${stamp.slice(10,12)}:${stamp.slice(12,14)}`, fileName: `MER_${merchantNo}_${stamp}_yjhx.xlsx`}]}}];
     }
     if (args[1] === "inspect") return [{ result: {
-      status: "ready", hasQuery: true, hasDownloadList: true,
+      status: !trade && downloadListOpen ? "controls_missing" : "ready",
+      hasQuery: trade || !downloadListOpen,
+      hasDownloadList: true,
       ...(trade ? {} : { downloadListOpen })
     } }];
     if (args[1] === "closeDownloadList") {
