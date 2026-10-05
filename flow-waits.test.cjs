@@ -53,16 +53,25 @@ async function check(trade, stuck) {
         if(closing&&++reads===2&&!stuck)closed=true;
         return closed?{status:'not_open'}:{status:'found',page:1,total:1,hasNext:false,rows:[{fileName:file,createdAt:'2026-10-03 00:00:01',statusCode:'ready',downloadEnabled:true}]};
       }
+      if(op==='downloadTaskDirect'){
+        if(trade)throw Error('trade must still use its list UI');
+        downloads++;
+        return {status:'download_requested'};
+      }
       if(op==='downloadTask'){downloads++;return {status:'download_requested'};}
       if(op==='confirmDownload')return {status:'download_completed',downloadId:1};
       if(op==='closeDownloadList'){closing=true;return {status:'closed'};}
       throw Error(op);
     }});
-  if(stuck)await assert.rejects(promise,/关闭结果无法确认/);
-  else {await promise;assert(closed,'final close must be observed before success');}
+  if(trade&&stuck)await assert.rejects(promise,/关闭结果无法确认/);
+  else {
+    await promise;
+    if(trade)assert(closed,'final close must be observed before success');
+    else assert.equal(closing,false,'account direct download must not open or close the list');
+  }
   assert.equal(downloads,1);
 }
 (async()=>{
   for(const trade of [false,true])for(const stuck of [false,true])await check(trade,stuck);
-  console.log('PASS: five-minute pauses preserve monthly deadlines; snapshot deadlines stay on wall clock; final delayed/stuck list closes are verified for both reports');
+  console.log('PASS: pauses preserve deadlines; account direct download skips list UI while trade final close remains verified');
 })().catch(e=>{console.error(e);process.exitCode=1;});
