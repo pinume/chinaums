@@ -5,6 +5,7 @@ let now = 1000;
 let merchantValues = ['89813014812B1L3'];
 let rowSignature = 'before';
 let exportClicks = 0;
+let apiCalls = 0;
 class Element {
   constructor(text = '', children = []) { this.text = text; this.children = children; this.classList = {contains: () => false}; }
   get textContent() { return typeof this.text === 'function' ? this.text() : this.text; }
@@ -27,9 +28,16 @@ const table = new Element();
 table.querySelectorAll = selector => selector === '.el-table__header-wrapper thead th' ? [new Element('交易金额')]
   : selector === '.el-table__body-wrapper tbody > tr' ? merchantValues.map(value => new Element(() => `${rowSignature} ${value}`, [new Element(value)])) : [];
 table.closest = () => null;
-table.__vue__ = {$parent: {$options:{name:'table'}, get tableData(){return merchantValues.map(mchntId=>({mchntId}));}}};
+const component = {
+  $options:{name:'table'},
+  get tableData(){return merchantValues.map(mchntId=>({mchntId}));},
+  $axiosApi:{axiosPromisePara:async () => {apiCalls++;return {success:true,code:'000000',message:'成功',data:null};}}
+};
+table.__vue__ = {$parent: component};
 const context = vm.createContext({
   Date: class extends Date { static now() { return now; } },
+  AbortSignal,
+  localStorage:{getItem:()=> 'TEST_TOKEN'},
   location: {hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},
   Element, getComputedStyle: () => ({display:'block',visibility:'visible',opacity:'1'}),
   document: {body:new Element('根据查询条件共查询到 1 条记录'),
@@ -58,12 +66,14 @@ async function ready(adapter) {
   assert.equal((await adapter('submitExport',{gate,targetMerchantId:'89813014812B1L3'})).status,'blocked');
   assert.equal(exportClicks,0);
   merchantValues = ['89813014812B1L3'];
-  assert.equal((await adapter('submitExport',{gate,targetMerchantId:'89813014812B1L3'})).status,'clicked');
-  assert.equal(exportClicks,1);
+  assert.equal((await adapter('submitExport',{gate,targetMerchantId:'89813014812B1L3'})).status,'accepted');
+  assert.equal(apiCalls,1);
+  assert.equal(exportClicks,0);
   merchantValues = [''];
   assert.equal((await ready(adapter)).status,'failed');
   merchantValues = ['89813014812B1L3','OTHER'];
   assert.equal((await ready(adapter)).status,'failed');
-  assert.equal(exportClicks,1);
-  console.log('PASS: trade merchant identity is required and rechecked immediately before export');
+  assert.equal(apiCalls,1);
+  assert.equal(exportClicks,0);
+  console.log('PASS: trade merchant identity is required and rechecked immediately before direct applyExport');
 })().catch(error => { console.error(error); process.exitCode = 1; });
