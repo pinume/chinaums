@@ -177,8 +177,8 @@ const transition = async (event) => {
     QUERY_READY: `${month}：查询结果已更新并稳定。`,
     SUBMITTING: `${month}：查询完成，正在申请 XLSX。`,
     WAITING_FOR_SLOT: event.pending === undefined
-      ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒，检查生成状态后重试当前月。`
-      : `${month}：等待申请名额，本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成。`,
+      ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒；对账明细将通过暂存接口检查本轮任务进度后重试。`
+      : `${month}：等待申请名额，暂存接口显示本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成；不打开下载暂存列表。`,
     NO_DATA: `${month}：明确返回无数据，跳过空文件。`,
     SUBMITTED: `${month}：申请已被服务器接受。`,
     WAITING_GENERATION: event.listStatus === "api"
@@ -510,7 +510,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-05-account-direct-download。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-05-account-slot-api。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
@@ -587,7 +587,9 @@ const run = async () => {
   state.status = "COMPLETED";
   state.stage = submittedMonths.length ? "本轮文件已完成下载" : "本轮没有需要下载的文件";
   appendLog(submittedMonths.length
-    ? "导出流程结束。Chrome 已确认本轮所有文件下载完成，并关闭暂存列表。"
+    ? (reportType === "account-detail"
+      ? "导出流程结束。Chrome 已确认本轮所有文件下载完成；对账明细正常下载路径未打开下载暂存列表。"
+      : "导出流程结束。Chrome 已确认本轮所有文件下载完成，并关闭暂存列表。")
     : "导出流程结束。本轮月份均无数据，没有提交导出申请。");
   renderState();
   await saveState();
