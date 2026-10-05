@@ -321,7 +321,7 @@
           continue;
         }
         await setMonthState(month, "UNKNOWN", { attemptedAt, reason: reconciliation?.reason || "服务端是否接受申请无法确认，禁止自动重提。" });
-        throw new Error(`${month.key} 提交结果 UNKNOWN；先核对暂存列表，不会自动重试。`);
+        throw new Error(`${month.key} 提交结果 UNKNOWN；已执行安全对账但仍无法确认，禁止自动重试。`);
       }
     }
 
