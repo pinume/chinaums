@@ -133,47 +133,36 @@ async function checkAccount(mode = "success") {
   }
 }
 
-async function checkTradeCloseRetry() {
+async function checkTradeDirect() {
   let now = new Date(2026, 8, 30, 12, 0, 2).getTime();
   Date.now = () => now;
   const tradeFile = `MER_${merchantNo}_20260930120001_yjhx.xlsx`;
-  let closeAttempts = 0;
-  let opened = false;
+  const taskId = "20260930120001681550426941423616";
   const calls = [];
   await globalThis.CHINAUMS_DOWNLOAD_RUNNER.run({
     reportType: "trade-audit",
     merchantNo,
     startedAt: new Date(2026, 8, 30, 12, 0, 0).toISOString(),
-    submittedMonths: [{ month: "2026-09", remoteFileName: tradeFile, remoteTaskId: "task-1", submittedAt: "2026-09-30T04:00:00.000Z" }],
+    submittedMonths: [{ month: "2026-09", remoteFileName: tradeFile, remoteTaskId: taskId, submittedAt: "2026-09-30T04:00:00.000Z" }],
     gate: { allowed: true, merchantNo },
     checkpoint: async () => {},
     sleep: async (milliseconds) => { now += milliseconds; },
     transition: async () => {},
-    invoke: async (operation) => {
+    invoke: async (operation, args = {}) => {
       calls.push(operation);
       if (operation === "snapshotExportTasks") {
-        return { status: "found", rows: [{ id: "task-1", fileName: tradeFile, statusCode: "ready", exportStatus: "02", exportStatusDesc: "成功" }] };
+        return { status: "found", rows: [{ id: taskId, fileName: tradeFile, statusCode: "ready", exportStatus: "02", exportStatusDesc: "成功" }] };
       }
-      if (operation === "openDownloadList") { opened = true; return { status: "clicked" }; }
-      if (operation === "parseDownloadTasks") {
-        if (!opened) return { status: "not_open" };
-        return { status: "found", page: 1, total: 1, hasNext: false,
-          rows: [{ fileName: tradeFile, createdAt: "2026-09-30 12:00:01", statusCode: "ready", downloadEnabled: true }] };
+      if (operation === "downloadTaskDirect") {
+        assert.equal(args.taskId, taskId);
+        assert.equal(args.fileName, tradeFile);
+        return { status: "download_requested" };
       }
-      if (operation === "downloadTask") return { status: "download_requested" };
       if (operation === "confirmDownload") return { status: "download_completed", downloadId: 1 };
-      if (operation === "closeDownloadList") {
-        closeAttempts += 1;
-        if (closeAttempts >= 4) { opened = false; return { status: "already_closed" }; }
-        return { status: "closed" };
-      }
       throw new Error(operation);
     }
   });
-  const closeIndex = calls.indexOf("closeDownloadList");
-  assert.deepEqual(calls.slice(closeIndex), ["closeDownloadList", "parseDownloadTasks",
-    "closeDownloadList", "parseDownloadTasks", "closeDownloadList", "parseDownloadTasks",
-    "closeDownloadList"]);
+  assert.deepEqual(calls, ["snapshotExportTasks", "downloadTaskDirect", "confirmDownload"]);
 }
 
 (async () => {
@@ -188,7 +177,7 @@ async function checkTradeCloseRetry() {
     invoke: async () => { calls += 1; }
   }), /同一远端文件名/);
   assert.equal(calls, 0);
-  await checkTradeCloseRetry();
-  console.log("PASS: account generation uses exact API task identity, downloads directly by task ID, and keeps Chrome completion confirmation");
+  await checkTradeDirect();
+  console.log("PASS: both reports use exact API task identity, direct task downloads, and Chrome completion confirmation");
 })().catch((error) => { console.error(error); process.exitCode = 1; })
   .finally(() => { Date.now = originalDateNow; });
