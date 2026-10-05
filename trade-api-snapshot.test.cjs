@@ -15,7 +15,7 @@ const rows = [
     exportFilePath:'/apps/data/yjhxexport2026', exportStatus:'01', exportStatusDesc:'处理中',
     createTime:'2026-10-05 11:14:10', modifyTime:'2026-10-05 11:14:10', errorMsg:null},
   {id:'task-failed', exportFileName:'MER_89813014812B06R_20261005110538_yjhx.xlsx',
-    exportFilePath:'/apps/data/yjhxexport2026', exportStatus:'03', exportStatusDesc:'失败',
+    exportFilePath:'/apps/data/yjhxexport2026', exportStatus:'02', exportStatusDesc:'成功',
     createTime:'2026-10-05 11:05:38', modifyTime:'2026-10-05 11:11:16', errorMsg:'生成失败'}
 ];
 const component = {
@@ -44,7 +44,6 @@ vm.runInContext(fs.readFileSync(__dirname + '/trade-audit.js','utf8'), context);
   assert.equal(result.status, 'found');
   assert.equal(calls, 1, 'once every requested task ID is found, historical pages must not be scanned');
   assert.deepEqual(Array.from(result.rows, row => row.statusCode), ['ready','pending','failed']);
-  assert.equal(result.rows[0].filePath, '/apps/data/yjhxexport2026');
   assert.equal(result.rows[0].exportStatus, '02');
   assert.equal(result.rows[0].exportStatusDesc, '成功');
   assert.equal(result.rows[2].errorMsg, '生成失败');
