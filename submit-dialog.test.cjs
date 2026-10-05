@@ -66,7 +66,7 @@ async function scenario({duplicate = false, label = '关闭', text = '申请已�
   assert.equal(delayed.clicks, 1);
   const lingering = await scenario({lingeringDom:true});
   assert.equal(lingering.result.status, 'closed', 'closed Vue state must win over a lingering leave-animation DOM');
-    const stuck = await scenario({stuck: true});
+  const stuck = await scenario({stuck: true});
   assert.equal(stuck.result.status, 'blocked');
   assert.equal(stuck.timerCalls, 1);
   assert.match(stuck.result.reason, /仍未就绪/);
