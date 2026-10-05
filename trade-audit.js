@@ -88,8 +88,17 @@
         body: JSON.stringify(payload),
         signal: controller.signal
       });
+      if (Date.now() >= deadline) {
+        controller.abort();
+        throw new Error("以旧换新接口调用已超过截止时间。");
+      }
       if (!response?.ok) throw new Error(`以旧换新接口 HTTP ${response?.status ?? "unknown"}。`);
-      return await response.json();
+      const data = await response.json();
+      if (Date.now() >= deadline) {
+        controller.abort();
+        throw new Error("以旧换新接口调用已超过截止时间。");
+      }
+      return data;
     } finally {
       clearTimeout(timer);
     }
