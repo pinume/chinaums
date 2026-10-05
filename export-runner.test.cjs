@@ -4,6 +4,7 @@ const vm = require("node:vm");
 
 const trade = process.argv.includes("trade-audit");
 const stopAtSubmit = process.argv.includes("STOPPED");
+let downloadListOpen = process.argv.includes("LIST_OPEN");
 const elements = new Map();
 const element = (selector) => {
   if (!elements.has(selector)) elements.set(selector, {
@@ -46,6 +47,7 @@ if (!stopAtSubmit) context.CHINAUMS_MONTHLY_RUNNER = {
 };
 let downloadRuns = 0;
 let adapterInjections = 0;
+let startupCloseCalls = 0;
 let latest;
 let archived;
 const closedTabs = [];
@@ -101,8 +103,19 @@ context.chrome = {
       const stamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
       return [{result: {status: "found", rows: [{createdAt: `${stamp.slice(0,4)}-${stamp.slice(4,6)}-${stamp.slice(6,8)} ${stamp.slice(8,10)}:${stamp.slice(10,12)}:${stamp.slice(12,14)}`, fileName: `MER_${merchantNo}_${stamp}_yjhx.xlsx`}]}}];
     }
-    return [{ result: args[1] === "inspect" ? { status: "ready", hasQuery: true, hasDownloadList: true }
-      : { status: args[1] === "closeDownloadList" ? "already_closed" : "unknown" } }];
+    if (args[1] === "inspect") return [{ result: {
+      status: "ready", hasQuery: true, hasDownloadList: true,
+      ...(trade ? {} : { downloadListOpen })
+    } }];
+    if (args[1] === "closeDownloadList") {
+      startupCloseCalls += 1;
+      if (!trade && downloadListOpen) {
+        downloadListOpen = false;
+        return [{ result: { status: "closed" } }];
+      }
+      return [{ result: { status: "already_closed" } }];
+    }
+    return [{ result: { status: "unknown" } }];
   } }
 };
 vm.runInContext(fs.readFileSync(`${__dirname}/export-runner.js`, "utf8"), context);
@@ -131,6 +144,10 @@ completed.then((state) => {
   assert.equal(state.merchantNo, merchantNo);
   assert(elements.get("#export-target").textContent.includes(merchantNo), "both reports must display the identified merchant");
   assert.equal(adapterInjections, 1, "replace a preexisting adapter once without resetting it for every operation");
+  if (!trade) {
+    assert.equal(startupCloseCalls, process.argv.includes("LIST_OPEN") ? 1 : 0,
+      "account startup must only touch the download list when inspect confirms it is already open");
+  }
   assert.equal(state.logs.filter((message) => message.startsWith("已识别本轮")).length, 1,
     "unchanged polling results must not spam the log");
   console.log(`PASS: ${prior.status} starts a fresh run and archives old state`);
