@@ -167,10 +167,16 @@
   };
   const finishQueryObservation = () => queryTracker?.observer?.disconnect();
 
+  const modalOpen = (dialog) => {
+    const wrapper = dialog.closest?.(".el-message-box__wrapper,.el-dialog__wrapper");
+    const component = [dialog.__vue__, wrapper?.__vue__, wrapper?.__vue__?.$parent]
+      .find((candidate) => typeof candidate?.visible === "boolean");
+    return typeof component?.visible === "boolean" ? component.visible : visible(dialog);
+  };
   const dialogTexts = () => [...document.querySelectorAll(
     '[role="dialog"],[aria-modal="true"],.el-message-box,.el-dialog'
   )]
-    .filter(visible)
+    .filter(modalOpen)
     .map(textOf)
     .filter(Boolean);
   const classifySubmit = () => {
@@ -234,7 +240,8 @@
     const dialog = dialogs[0];
     if (!dialog) return { status: "not_open" };
     if (dialogs.length !== 1) return { status: "parse_error", rows: [] };
-    if (queryBusy() || !visible(dialog)) return { status: "loading" };
+    const dialogBusy = [...dialog.querySelectorAll(".el-loading-mask,.layui-layer-loading,.loading")].some(visible);
+    if (dialogBusy || !visible(dialog)) return { status: "loading" };
     if (downloadRefresh) {
       downloadRefresh.capture(downloadRefresh.observer?.takeRecords() || []);
       downloadRefresh.capture(performance.getEntriesByType("resource"));
@@ -447,7 +454,7 @@
         }
         const closeLabel = result.status === "throttled" ? "确认" : "关闭";
         const dialogs = [...document.querySelectorAll(".el-message-box,.el-dialog")]
-          .filter(visible)
+          .filter(modalOpen)
           .filter((dialog) => /申请已提交|超过\s*\d+\s*条申请在处理中|申请失败|导出失败|系统异常/.test(textOf(dialog)));
         if (dialogs.length !== 1) return { status: "blocked", reason: "提交提示弹窗缺失或不唯一。" };
         const dialog = dialogs[0];
@@ -456,7 +463,7 @@
           .filter((element) => !element.disabled && normalize(textOf(element)) === closeLabel);
         if (scoped.length !== 1) return { status: "blocked", reason: "提交提示内的确认/关闭按钮缺失或不唯一。" };
         scoped[0].click();
-        const isClosed = () => !visible(dialog) && dialogTexts().length === 0;
+        const isClosed = () => !modalOpen(dialog) && dialogTexts().length === 0;
         // 后台页面的连续短计时器会被节流；由 DOM 变化直接确认关闭。
         const closed = await new Promise((resolve) => {
           if (isClosed()) return resolve(true);
@@ -476,7 +483,7 @@
           if (isClosed()) finish(true);
         });
         if (closed) return { status: "closed" };
-        return { status: "blocked", reason: `关闭等待8秒后仍未就绪（目标提示${visible(dialog) ? "仍可见" : "已隐藏"}，可见弹窗${dialogTexts().length}个）；未继续下一步。` };
+        return { status: "blocked", reason: `关闭等待8秒后仍未就绪（目标提示${modalOpen(dialog) ? "仍打开" : "已关闭"}，仍打开弹窗${dialogTexts().length}个）；未继续下一步。` };
       }
       case "openDownloadList": {
         const dialogs = downloadDialogs();
@@ -545,11 +552,25 @@
         const close = [...dialogs[0].querySelectorAll(".el-dialog__headerbtn")].filter(visible);
         if (close.length !== 1) return { status: "blocked", reason: "下载暂存列表右上角关闭控件缺失或不唯一。" };
         close[0].click();
-        const component = downloadDialogComponent(dialogs[0]);
-        if (component) {
-          await component.$nextTick();
-          if (component.visible !== false) return { status: "blocked", reason: "点击关闭后，下载暂存列表组件仍保持打开。" };
-        }
+        const isClosed = () => downloadDialogs().length === 0;
+        const closed = await new Promise((resolve) => {
+          if (isClosed()) return resolve(true);
+          let timer;
+          const finish = (value) => {
+            observer.disconnect();
+            clearTimeout(timer);
+            resolve(value);
+          };
+          const observer = new MutationObserver(() => {
+            if (isClosed()) finish(true);
+          });
+          observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
+            attributeFilter: ["class", "style", "hidden"] });
+          const deadline = Math.min(Date.now() + 8000, args.operationDeadline ?? Infinity);
+          timer = setTimeout(() => finish(isClosed()), Math.max(0, deadline - Date.now()));
+          if (isClosed()) finish(true);
+        });
+        if (!closed) return { status: "blocked", reason: "点击关闭后，下载暂存列表在8秒内仍保持打开。" };
         downloadRefresh?.observer?.disconnect();
         downloadRefresh = null;
         return { status: "closed" };
