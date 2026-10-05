@@ -481,6 +481,8 @@
         checkDeadline();
         const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
         try {
+          const targetTaskIds = new Set((Array.isArray(args.taskIds) ? args.taskIds : [])
+            .map((id) => String(id || "")).filter(Boolean));
           const rows = [];
           for (let page = 1; page <= 100; page += 1) {
             checkDeadline();
@@ -490,10 +492,24 @@
             const data = await response.json();
             checkDeadline();
             if (data.respCode !== "000000" || !Array.isArray(data.list?.content)) throw new Error("对账暂存接口结构异常。");
-            rows.push(...data.list.content.map((row) => ({ id: String(row.export_id || ""), fileName: row.file_name })));
+            rows.push(...data.list.content.map((row) => {
+              const taskStatus = String(row.task_status || "");
+              return {
+                id: String(row.export_id || ""),
+                fileName: String(row.file_name || ""),
+                taskStatus,
+                statusCode: taskStatus === "30" ? "ready" : "pending"
+              };
+            }));
+            if (rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) {
+              throw new Error("对账暂存任务身份缺失或重复。");
+            }
+            if (targetTaskIds.size && [...targetTaskIds].every((id) => rows.some((row) => row.id === id))) {
+              return { status: "found", rows: rows.filter((row) => targetTaskIds.has(row.id)) };
+            }
             if (page >= Number(data.list.totalPages)) {
-              if (rows.length !== Number(data.list.totalElements) || rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("对账暂存任务分页不完整或身份重复。");
-              return { status: "found", rows };
+              if (!targetTaskIds.size && rows.length !== Number(data.list.totalElements)) throw new Error("对账暂存任务分页不完整。");
+              return { status: "found", rows: targetTaskIds.size ? rows.filter((row) => targetTaskIds.has(row.id)) : rows };
             }
           }
           throw new Error("对账暂存任务页数超出读取范围。");
