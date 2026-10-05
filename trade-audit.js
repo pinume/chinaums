@@ -487,6 +487,7 @@
         const button = exactButton("下载暂存列表");
         if (!button) return { status: "controls_missing" };
         beginDownloadRefresh();
+        button.focus();
         button.click();
         return { status: "clicked" };
       }
