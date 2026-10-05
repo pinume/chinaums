@@ -554,6 +554,7 @@
               return {
                 id: String(row.export_id || ""),
                 fileName: String(row.file_name || ""),
+                createdAt: String(row.apply_date || ""),
                 taskStatus,
                 statusCode: taskStatus === "30" ? "ready" : "pending"
               };
