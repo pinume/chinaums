@@ -50,12 +50,12 @@ vm.runInContext(fs.readFileSync(__dirname + "/trade-audit.js", "utf8"), trade);
 
 (async () => {
   const accountInspection = await account.__chinaumsAccountDetailAdapter("inspect");
-  assert.equal(accountInspection.status, "ready",
-    "account API readiness must not depend on a unique page form");
-
   const tradeInspection = await trade.__chinaumsTradeAuditAdapter("inspect");
-  assert.equal(tradeInspection.status, "ready",
-    "trade API readiness must not depend on a Vue table component");
+  assert.deepEqual(
+    { account: accountInspection.status, trade: tradeInspection.status },
+    { account: "ready", trade: "ready" },
+    "API readiness must not depend on account form or trade Vue table internals"
+  );
 
   console.log("PASS: both report adapters are API-ready without page-private form/Vue query controls");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
