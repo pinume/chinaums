@@ -518,7 +518,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-05-trade-unknown-api。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-05-trade-direct-download。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
@@ -597,9 +597,7 @@ const run = async () => {
   state.status = "COMPLETED";
   state.stage = submittedMonths.length ? "本轮文件已完成下载" : "本轮没有需要下载的文件";
   appendLog(submittedMonths.length
-    ? (reportType === "account-detail"
-      ? "导出流程结束。Chrome 已确认本轮所有文件下载完成；对账明细正常下载路径未打开下载暂存列表。"
-      : "导出流程结束。Chrome 已确认本轮所有文件下载完成，并关闭暂存列表。")
+    ? `导出流程结束。Chrome 已确认本轮所有文件下载完成；${reportType === "trade-audit" ? "以旧换新" : "对账明细"}最终下载未打开下载暂存列表。`
     : "导出流程结束。本轮月份均无数据，没有提交导出申请。");
   renderState();
   await saveState();
