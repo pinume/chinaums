@@ -22,16 +22,10 @@ async function check(trade, mode) {
     return trade ? {success:true,data:{list:[{id:'1',exportFileName:'one.xlsx'}],pages:2,total:2}}
       : {ok:true,json:async()=>({respCode:'000000',list:{content:[{export_id:'1',file_name:'one.xlsx'}],totalPages:2,totalElements:2}})};
   };
-  const component = {$options:{name:'table'},$axiosApi:{axiosPromisePara:async (data,url,config) => {
-    assert.equal(config.timeout,2000);
-    return request(config);
-  }}};
-  const table = new Element(); table.__vue__ = {$parent:component};
   const context = vm.createContext({Date:Clock,Element,AbortController,
-    location:{hostname:'service.chinaums.com',pathname:trade?'/uisportalfront':'/uisportal/accountCheckDetailQry/toDetail',hash:'#/auditOfTrade2026'},
-    localStorage:{getItem:()=>null},getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}),
-    document:{querySelectorAll:selector=>selector==='.el-table'?[table]:[]},
-    fetch:async(url,config)=>request(config),
+    location:{protocol:'https:',hostname:'service.chinaums.com',pathname:trade?'/uisportalfront':'/uisportal/accountCheckDetailQry/toDetail',hash:'#/auditOfTrade2026'},
+    localStorage:{getItem:()=>"TEST_TOKEN",setItem:()=>{}},getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}),
+    fetch:async(url,config)=>{ if(url.endsWith("/init"))return {ok:true,json:async()=>({success:true,code:"000000",data:"TEST_TOKEN"})}; const data = await request(config); return trade ? {ok:true,json:async()=>data} : data; },
     setTimeout:fn=>{timer=fn;return 1;},clearTimeout:()=>{cleared=true;}
   });
   const file = trade?'trade-audit.js':'account-detail.js';

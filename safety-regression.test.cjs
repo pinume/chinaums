@@ -17,7 +17,7 @@ for (const file of ['monthly-runner.js', 'download-runner.js']) {
   vm.runInContext(fs.readFileSync(`${__dirname}/${file}`, 'utf8'), context);
 }
 const source = fs.readFileSync(`${__dirname}/export-runner.js`, 'utf8');
-vm.runInContext(source.slice(source.indexOf('const parsePortalTimestamp ='), source.indexOf('const closeExistingSubmitNotice =')) + '\nglobalThis.reconcile = reconcileUnknown;', context);
+vm.runInContext(source.slice(source.indexOf('const parsePortalTimestamp ='), source.indexOf('const run =')) + '\nglobalThis.reconcile = reconcileUnknown;', context);
 const month = {key: '2026-01', start: '2026-01-01', end: '2026-01-31'};
 
 async function reconcile(mode) {
@@ -89,13 +89,11 @@ async function monthly(mode) {
       return {status: 'accepted', fileName, taskId:'20260930120002681550426941423616'};
     },
     invoke: async operation => {
-      if (operation === 'setDateRange') return {status: 'set'};
       if (operation === 'query') {
         if (mode === 'stop-query') throw new Error('STOPPED_BY_USER');
-        return {status: 'clicked'};
+        return {status: 'ready', count: 1, merchantId: mode === 'missing-merchant' ? null : 'internal-id',
+          merchantNo: mode === 'missing-merchant' ? null : mode === 'switch' && submits ? 'OTHER' : merchantNo};
       }
-      if (operation === 'queryState') return {status: 'ready', count: 1, merchantId: mode === 'missing-merchant' ? null : 'internal-id',
-        merchantNo: mode === 'missing-merchant' ? null : mode === 'switch' && submits ? 'OTHER' : merchantNo};
       if (operation === 'snapshotExportTasks') return {status:'found',rows:submits ? [{id:'new-task',fileName}] : []};
       if (operation === 'submitExport') {
         submits++;

@@ -24,9 +24,7 @@ async function check(trade, stuck) {
     sleep:async ms=>{wall+=ms;},checkpoint:async()=>{if(phase!==pausedPhase){pausedPhase=phase;pause();}},
     transition:async e=>{events.push(e);phase=e.status;},invoke:async(op,args)=>{
       if(op==='submitDialogState')return {status:'clear'};
-      if(op==='setDateRange')return {status:'set'};
-      if(op==='query')return {status:'clicked'};
-      if(op==='queryState')return {status:'ready',count:1,...(trade?{merchantId:'id'}:{merchantNo:'MERCHANT1'})};
+      if(op==='query')return {status:'ready',count:1,...(trade?{merchantId:'id'}:{merchantNo:'MERCHANT1'})};
       if(op==='snapshotExportTasks'){
         if(args.operationDeadline)assert(args.operationDeadline>wall,'adapter receives a wall-clock deadline even after pauses');
         return {status:'found',rows:tasks};
@@ -55,7 +53,7 @@ async function check(trade, stuck) {
       if(op==='downloadTaskDirect'){
         assert.equal(args.fileName,file);
         downloads++;
-        return {status:'download_requested'};
+        return {status:'download_requested',downloadId:1};
       }
       if(op==='confirmDownload')return stuck?{status:'download_unknown'}:{status:'download_completed',downloadId:1};
       throw Error(op);

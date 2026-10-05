@@ -66,10 +66,11 @@ async function checkAccount(mode = "success") {
         assert.equal(args.targetMerchantNo, merchantNo);
         assert.equal(args.gate.allowed, true);
         if (mode === "direct-blocked") return { status: "blocked", reason: "guard" };
-        return { status: "download_requested" };
+        return { status: "download_requested", downloadId: 7 };
       }
       if (operation === "confirmDownload") {
         confirmations += 1;
+        assert.equal(args.downloadId, 7, "confirmation must receive the ID from the download request");
         assert.equal(args.fileName, fileName);
         if (mode === "confirm-fail") return { status: "download_unknown" };
         return { status: "download_completed", downloadId: 7 };
@@ -156,7 +157,7 @@ async function checkTradeDirect() {
       if (operation === "downloadTaskDirect") {
         assert.equal(args.taskId, taskId);
         assert.equal(args.fileName, tradeFile);
-        return { status: "download_requested" };
+        return { status: "download_requested", downloadId: 1 };
       }
       if (operation === "confirmDownload") return { status: "download_completed", downloadId: 1 };
       throw new Error(operation);

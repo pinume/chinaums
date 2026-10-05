@@ -37,9 +37,7 @@ async function check(mode) {
     },
     invoke: async (operation, args = {}) => {
       if (operation === "submitDialogState") return { status: "clear" };
-      if (operation === "setDateRange") return { status: "set" };
-      if (operation === "query") return { status: "clicked" };
-      if (operation === "queryState") return { status: "ready", count: 1, merchantNo: merchant };
+      if (operation === "query") return { status: "ready", count: 1, merchantNo: merchant };
 
       if (operation === "snapshotExportTasks") {
         if (Array.isArray(args.taskIds)) {

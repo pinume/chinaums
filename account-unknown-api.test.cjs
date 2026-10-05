@@ -3,7 +3,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const merchantNo = "89813015722APT1";
-const attemptedAt = "2026-10-05T13:36:30.000Z";
+const attemptedAt = new Date(2026, 9, 5, 13, 36, 30).toISOString();
 const acceptedId = "0c057e50442143a68dbf9339784f2127";
 const fileName = `${merchantNo}_MX_20261005133631.xlsx`;
 
@@ -51,7 +51,7 @@ async function check(mode) {
   const source = fs.readFileSync(`${__dirname}/export-runner.js`, "utf8");
   vm.runInContext(source.slice(
     source.indexOf("const parsePortalTimestamp ="),
-    source.indexOf("const closeExistingSubmitNotice =")
+    source.indexOf("const run =")
   ) + "\nglobalThis.reconcile = reconcileUnknown;", context);
 
   const baselineRows = mode === "duplicate-baseline"

@@ -56,7 +56,7 @@ async function run(mode = 'success') {
         assert(!clicks.includes(args.fileName));
         assert.equal(args.taskId, ids[clicks.length]);
         clicks.push(args.fileName);
-        return {status:'download_requested'};
+        return {status:'download_requested',downloadId:clicks.length};
       }
       if (op === 'confirmDownload') return {status:'download_completed', downloadId:clicks.length};
       throw new Error(op);

@@ -72,27 +72,13 @@ const withTimeout = (promise, milliseconds, operation) => {
   let timerId;
   const timeout = new Promise((_, reject) => {
     timerId = window.setTimeout(
-      () => reject(new Error(`页面操作“${operation}”在${Math.ceil(milliseconds / 1000)}秒内没有响应。`)),
+      () => reject(new Error(`接口操作“${operation}”在${Math.ceil(milliseconds / 1000)}秒内没有响应。`)),
       milliseconds
     );
   });
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timerId));
 };
 const normalize = (value) => String(value ?? "").replace(/[\s\u200B-\u200D\uFEFF]/g, "").toUpperCase();
-const safeUrlForStorage = (rawUrl) => {
-  try {
-    const url = new URL(rawUrl);
-    for (const key of [...url.searchParams.keys()]) {
-      if (/token|ticket|secret|password|session|auth|code|merchant|merid/i.test(key)) {
-        url.searchParams.set(key, "[已隐藏]");
-      }
-    }
-    if (/access_token|refresh_token|session|auth/i.test(url.hash)) url.hash = "#[已隐藏]";
-    return url.href;
-  } catch {
-    return "";
-  }
-};
 const scannerConfig = {
   host: SITE_CONFIG.host,
   portalRoot: SITE_CONFIG.portalRoot,
@@ -158,8 +144,8 @@ const transition = async (event) => {
   state.stage = status || "RUNNING";
   if (["WAITING_FOR_SLOT", "WAITING_GENERATION", "ALL_MONTHS_SUBMITTED", "DOWNLOAD_REQUESTS_SENT"].includes(status)) {
     state.status = status;
-  } else if (["SETTING_DATE", "STARTING_QUERY", "QUERYING", "QUERY_READY", "SUBMITTING", "SUBMITTED", "NO_DATA", "UNKNOWN", "FAILED", "DOWNLOAD_REQUESTED", "DOWNLOAD_COMPLETED", "OPENING_DOWNLOAD_LIST"].includes(status)) {
-    state.status = ["DOWNLOAD_REQUESTED", "DOWNLOAD_COMPLETED", "OPENING_DOWNLOAD_LIST"].includes(status) ? "DOWNLOADING" : "RUNNING";
+  } else if (["QUERYING", "QUERY_READY", "SUBMITTING", "SUBMITTED", "NO_DATA", "UNKNOWN", "FAILED", "DOWNLOAD_REQUESTED", "DOWNLOAD_COMPLETED"].includes(status)) {
+    state.status = ["DOWNLOAD_REQUESTED", "DOWNLOAD_COMPLETED"].includes(status) ? "DOWNLOADING" : "RUNNING";
   } else {
     state.status = status || state.status || "RUNNING";
   }
@@ -171,10 +157,8 @@ const transition = async (event) => {
     state.months[month] = { ...state.months[month], ...event };
   }
   const messages = {
-    SETTING_DATE: `${month}：设置${reportType === "trade-audit" ? "交易日期" : "清算时间"}。`,
-    STARTING_QUERY: `${month}：正在启动查询。`,
-    QUERYING: `${month}：查询已触发，等待结果。`,
-    QUERY_READY: `${month}：查询结果已更新并稳定。`,
+    QUERYING: `${month}：正在查询并读取全部分页。`,
+    QUERY_READY: `${month}：已完成查询分页与商户核对。`,
     SUBMITTING: `${month}：查询完成，正在申请 XLSX。`,
     WAITING_FOR_SLOT: event.pending === undefined
       ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒${reportType === "account-detail" ? "；通过暂存接口检查本轮任务进度后重试" : "，稍后重试当前月"}。`
@@ -183,8 +167,8 @@ const transition = async (event) => {
     SUBMITTED: `${month}：申请已被服务器接受。`,
     WAITING_GENERATION: event.listStatus === "api"
       ? `暂存接口已匹配本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已确认生成成功；继续通过接口检查，不打开下载暂存列表。`
-      : `已识别本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已生成且尚未下载；列表状态 ${event.listStatus || "unknown"}，当前页读到 ${event.parsedRows ?? 0} 行；过滤：文件名或商户号 ${event.rejected?.fileName ?? 0}，时间格式 ${event.rejected?.createdAt ?? 0}，非本轮任务 ${event.rejected?.beforeRun ?? 0}。稍后重开列表更新状态。`,
-    DOWNLOAD_REQUESTED: `${month || "本轮任务"}：已通过行内检查并触发下载。`,
+      : `暂存接口暂未确认本轮文件状态（${event.listStatus || "unknown"}）；稍后通过接口重新读取。`,
+    DOWNLOAD_REQUESTED: `${month || "本轮任务"}：已校验任务并通过 Chrome 请求下载。`,
     DOWNLOAD_COMPLETED: `${month || "本轮任务"}：Chrome 已确认文件下载完成，立即继续下载已生成文件。`,
     DOWNLOAD_REQUESTS_SENT: "本轮所有文件均已由 Chrome 确认下载完成。"
   };
@@ -215,18 +199,6 @@ const checkpoint = async () => {
     renderState();
     await saveState();
   }
-};
-
-const waitForTab = async (predicate, timeoutMs = 25000) => {
-  const deadline = activeNow() + timeoutMs;
-  let last = null;
-  while (activeNow() < deadline) {
-    await checkpoint();
-    last = await chrome.tabs.get(tabId).catch(() => null);
-    if (last && predicate(last)) return last;
-    await sleep(350);
-  }
-  throw new Error(`等待目标页面超时。${last?.url ? ` 当前地址：${safeUrlForStorage(last.url)}` : ""}`);
 };
 
 const verifyCurrentSession = async () => {
@@ -264,40 +236,22 @@ const verifyCurrentSession = async () => {
   };
 };
 
-const currentFrameId = async (reportType, targetTabId = tabId) => {
-  const results = await chrome.scripting.executeScript({
-    target: { tabId: targetTabId, allFrames: true },
-    func: (routes) => ({
-      pathname: location.pathname,
-      hash: location.hash,
-      isTopFrame: window.top === window,
-      isReportFrame: routes.reportType === "account-detail"
-        ? window.top === window && location.pathname === routes.accountDetailPath
-        : location.pathname.replace(/\/+$/, "") === routes.frontendRoot && location.hash.includes("/auditOfTrade2026")
-    }),
-    args: [{
-      reportType,
-      accountDetailPath: SITE_CONFIG.reportRoutes.accountDetail,
-      frontendRoot: SITE_CONFIG.frontendRoot
-    }]
-  });
-  const match = results.find((item) => item.result?.isReportFrame === true);
-  return match?.frameId ?? null;
-};
-
-const waitForDownload = async ({ fileName, requestedAt }) => {
+const waitForDownload = async ({ fileName, downloadId }) => {
   if (!chrome.downloads?.search) throw new Error("下载确认权限不可用，请重新加载扩展并允许 downloads 权限。");
+  if (!Number.isInteger(downloadId) || downloadId < 0) throw new Error("下载 ID 无效，不能确认下载完成。");
   const escapedStem = fileName.replace(/\.xlsx$/i, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const filenameRegex = `(?:^|[/\\\\])${escapedStem}(?: \\(\\d+\\))?\\.xlsx$`;
   const deadline = activeNow() + 5 * 60 * 1000;
   while (activeNow() < deadline) {
     await checkpoint();
-    const items = await chrome.downloads.search({ startedAfter: requestedAt, filenameRegex });
+    const items = await chrome.downloads.search({ id: downloadId });
     if (items.length > 1) throw new Error(`文件 ${fileName} 对应多个新下载记录，无法唯一确认。`);
     const item = items[0];
+    if (item && item.id !== downloadId) throw new Error(`文件 ${fileName} 的下载记录身份不一致。`);
     if (item?.state === "interrupted") throw new Error(`文件 ${fileName} 下载中断：${item.error || "未知原因"}。`);
     if (item?.state === "complete") {
-      if (item.exists === false) throw new Error(`文件 ${fileName} 已被删除，不能记为下载完成。`);
+      if (!new RegExp(filenameRegex, "i").test(item.filename || "")) throw new Error(`文件 ${fileName} 的下载记录身份不一致。`);
+      if (item.exists !== true) throw new Error(`文件 ${fileName} 已被删除，不能记为下载完成。`);
       return { status: "download_completed", downloadId: item.id };
     }
     await sleep(500);
@@ -312,18 +266,17 @@ const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => 
   const defaultLimit = ["account-detail", "trade-audit"].includes(reportType) && ["query", "submitExport"].includes(operation) ? 60000 : 15000;
   const operationDeadline = Math.min(Date.now() + defaultLimit, args.operationDeadline ?? Infinity);
   const checkDeadline = () => {
-    if (Date.now() >= operationDeadline) throw new Error(`页面操作“${operation}”已超过截止时间。`);
+    if (Date.now() >= operationDeadline) throw new Error(`接口操作“${operation}”已超过截止时间。`);
   };
   checkDeadline();
   return withTimeout((async () => {
-    const frameId = await currentFrameId(reportType, targetTabId);
+    const frameId = 0;
     checkDeadline();
-    if (frameId === null) return { status: "wrong_page", reason: "未找到当前报表页面或业务 frame。" };
     const file = reportType === "account-detail" ? "account-detail.js" : "trade-audit.js";
     const globalName = reportType === "account-detail"
       ? "__chinaumsAccountDetailAdapter"
       : "__chinaumsTradeAuditAdapter";
-    const world = reportType === "trade-audit" ? "MAIN" : "ISOLATED";
+    const world = "ISOLATED";
     const loaded = await chrome.scripting.executeScript({
       target: { tabId: targetTabId, frameIds: [frameId] }, world,
       func: (name) => typeof globalThis[name] === "function",
@@ -339,46 +292,28 @@ const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => 
     const result = await chrome.scripting.executeScript({
       target: { tabId: targetTabId, frameIds: [frameId] }, world,
       func: async (name, action, actionArgs) => {
-        if (Date.now() >= actionArgs.operationDeadline) throw new Error("页面操作已超过截止时间，未执行。");
+        if (Date.now() >= actionArgs.operationDeadline) throw new Error("接口操作已超过截止时间，未执行。");
         const adapter = globalThis[name];
         if (typeof adapter !== "function") return { status: "adapter_missing" };
         return await adapter(action, actionArgs);
       },
       args: [globalName, operation, { ...args, operationDeadline }]
     });
-    return result[0]?.result || { status: "unknown" };
+    const response = result[0]?.result || { status: "unknown" };
+    if (operation !== "downloadTaskDirect" || response.status !== "download_requested") return response;
+    const url = new URL(response.url);
+    const account = reportType === "account-detail";
+    const expectedPath = account ? "/uisportal/commonController/exportDeailBill"
+      : `/uisportal/api/uis-tradein-server/portal/yjhx/v3/downloadExportFile/${args.taskId}`;
+    if (url.origin !== `https://${SITE_CONFIG.host}` || url.pathname !== expectedPath ||
+      (account && url.searchParams.get("exportId") !== args.taskId) ||
+      (!account && !url.searchParams.get("userPortalToken"))) throw new Error("下载地址与本轮任务不一致。");
+    await checkpoint();
+    checkDeadline();
+    const downloadId = await chrome.downloads.download({ url: url.href, conflictAction: "uniquify" });
+    if (!Number.isInteger(downloadId) || downloadId < 0) throw new Error("Chrome 未返回有效下载 ID；禁止重复请求。");
+    return { status: "download_requested", downloadId };
   })(), Math.max(0, operationDeadline - Date.now()), operation);
-};
-
-const navigateToReport = async () => {
-  const url = new URL((await chrome.tabs.get(tabId)).url);
-  const targetUrl = `https://${SITE_CONFIG.host}${reportType === "trade-audit" ? SITE_CONFIG.reportRoutes.tradeAuditPortal : SITE_CONFIG.reportRoutes.accountDetail}`;
-  await chrome.tabs.update(tabId, { active: true, ...(url.href !== targetUrl ? { url: targetUrl } : {}) });
-  await waitForTab((tab) => {
-    try {
-      const current = new URL(tab.url);
-      return current.origin === `https://${SITE_CONFIG.host}` && current.href === targetUrl && tab.status === "complete";
-    } catch {
-      return false;
-    }
-  });
-  const deadline = activeNow() + 30000;
-  let inspection;
-  while (activeNow() < deadline) {
-    inspection = await invoke(reportType, "inspect", {});
-    if (inspection?.downloadListOpen === true) {
-      const closed = await invoke(reportType, "closeDownloadList", {});
-      if (closed?.status !== "closed") {
-        throw new Error("检测到原先打开的下载暂存列表，但无法安全关闭；尚未开始本轮查询。");
-      }
-      appendLog("已关闭原先打开的下载暂存列表，准备继续月度查询。");
-      await sleep(200);
-      continue;
-    }
-    if (inspection?.status === "ready" && inspection.hasQuery) return;
-    await sleep(400);
-  }
-  throw new Error(`${reportType === "trade-audit" ? "以旧换新采集2026" : "对账明细"}页控件未就绪（${inspection?.status || "无返回状态"}）：${inspection?.reason || "未找到可用查询入口"}`);
 };
 
 const parsePortalTimestamp = (value) => {
@@ -452,18 +387,6 @@ const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMercha
   }
 };
 
-const closeExistingSubmitNotice = async () => {
-  const notice = await invoke(reportType, "classifySubmit", {});
-  if (!new Set(["accepted", "throttled", "failed"]).has(notice?.status)) return false;
-  let closed = { status: "unknown" };
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    closed = await invoke(reportType, "closeSubmitDialog", {});
-    if (closed?.status === "closed") return true;
-    await sleep(350);
-  }
-  throw new Error(`页面上已有提交提示，关闭失败（${closed?.reason || closed?.status || "未知状态"}）。`);
-};
-
 const run = async () => {
   if (!["account-detail", "trade-audit"].includes(reportType) || !Number.isInteger(tabId) || tabId <= 0 || !SITE_CONFIG) throw new Error("导出参数无效。");
   if (reportType === "trade-audit" && new Date().getFullYear() !== 2026) {
@@ -518,7 +441,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-05-account-query-api。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-05-business-api。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
@@ -538,8 +461,6 @@ const run = async () => {
   if (prior?.runId) appendLog(`上次运行（${prior.runId}）已留档；本轮从 ${monthKeys[0]} 重新开始，不会漏掉月份。`);
   await saveState();
 
-  await navigateToReport();
-  if (await closeExistingSubmitNotice()) appendLog("已关闭上次遗留的申请提示，开始本轮月份查询。");
   if (months.length) {
     await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
       months,
@@ -643,4 +564,3 @@ run().catch(async (error) => {
     elements.close.disabled = false;
   }
 });
-

@@ -48,10 +48,11 @@ async function checkRunner() {
         assert.equal(args.fileName, task.fileName);
         assert.equal(args.targetMerchantNo, merchantNo);
         requested.push(args.fileName);
-        return { status: "download_requested" };
+        return { status: "download_requested", downloadId: requested.length };
       }
       if (operation === "confirmDownload") {
         assert.equal(args.fileName, requested.at(-1));
+        assert.equal(args.downloadId, requested.length);
         return { status: "download_completed", downloadId: requested.length };
       }
       throw new Error(`Unexpected operation: ${operation}`);
@@ -89,7 +90,7 @@ async function checkAdapter() {
     Date,
     AbortController,
     encodeURIComponent,
-    location: { hostname: "service.chinaums.com", pathname: "/uisportalfront/", hash: "#/auditOfTrade2026" },
+    location: { protocol: "https:", hostname: "service.chinaums.com", pathname: "/uisportalfront/", hash: "#/auditOfTrade2026" },
     localStorage: { getItem: () => token },
     getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
     document: {
@@ -119,12 +120,8 @@ async function checkAdapter() {
 
   let response = await adapter("downloadTaskDirect", args);
   assert.equal(response.status, "download_requested");
-  assert.equal(appended.length, 1);
-  assert.equal(appended[0].src,
-    "/uisportal/api/uis-tradein-server/portal/yjhx/v3/downloadExportFile/20261005133941681550426941423616?userPortalToken=TEST_TOKEN");
-  assert.equal(appended[0].hidden, true);
-  assert.equal(appended[0].attrs["aria-hidden"], "true");
-  assert.equal(appended[0].removed, true);
+  assert.equal(response.url, "https://service.chinaums.com/uisportal/api/uis-tradein-server/portal/yjhx/v3/downloadExportFile/20261005133941681550426941423616?userPortalToken=TEST_TOKEN");
+  assert.equal(appended.length, 0, "adapter must not create an iframe");
 
   response = await adapter("downloadTaskDirect", { ...args, taskId: "bad-id" });
   assert.equal(response.status, "blocked");
@@ -133,7 +130,7 @@ async function checkAdapter() {
   token = "";
   response = await adapter("downloadTaskDirect", args);
   assert.equal(response.status, "blocked");
-  assert.equal(appended.length, 1, "failed guards must not start another download request");
+  assert.equal(appended.length, 0, "failed guards must not start another download request");
 }
 
 (async () => {

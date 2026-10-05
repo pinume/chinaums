@@ -65,7 +65,7 @@ context.CHINAUMS_DOWNLOAD_RUNNER = { run: async (args) => {
   await args.transition({ status: "WAITING_GENERATION", found: 0, expected: months.length, ready: 0 });
   for (const month of args.submittedMonths) await args.transition({status: "DOWNLOAD_COMPLETED", month: month.month, fileName: `${month.month}.xlsx`, downloadId: 7});
 } };
-const tab = { id: 1, url: trade ? "https://service.chinaums.com" + context.CHINAUMS_SITE_CONFIG.reportRoutes.tradeAuditPortal : "https://service.chinaums.com/uisportal/accountCheckDetailQry/toDetail", status: "complete" };
+const tab = { id: 1, url: trade ? "https://service.chinaums.com/uisportal/index_r" : "https://service.chinaums.com/uisportal/accountCheckDetailQry/toDetail", status: "complete" };
 context.chrome = {
   tabs: { update: async (id, props) => { assert.equal(id, 1); assert.equal(props.active, true); }, get: async (id) => id === 8 ? { id: 8, url: "chrome-extension://test/export.html" } : tab,
     getCurrent: async () => ({ id: 2 }), remove: async (id) => { closedTabs.push(id); } },
@@ -79,20 +79,20 @@ context.chrome = {
       if (["COMPLETED", "BLOCKED", "STOPPED"].includes(value.activeExportRun?.status)) complete(value.activeExportRun);
     }
   } },
-  scripting: { executeScript: async ({ args, files, world }) => {
+  scripting: { executeScript: async ({ args, files, world, target }) => {
+    if (target.frameIds) assert.deepEqual(Array.from(target.frameIds), [0]);
+    if (args?.length > 1) assert(!["inspect", "closeDownloadList", "closeSubmitDialog", "classifySubmit", "submitDialogState"].includes(args[1]));
     if (files) {
-      if (files.includes(trade ? "trade-audit.js" : "account-detail.js")) { assert.equal(world, trade ? "MAIN" : "ISOLATED"); adapterInjections += 1; }
+      if (files.includes(trade ? "trade-audit.js" : "account-detail.js")) { assert.equal(world, "ISOLATED"); adapterInjections += 1; }
       return [];
     }
-    if (args[0] === (trade ? "__chinaumsTradeAuditAdapter" : "__chinaumsAccountDetailAdapter")) assert.equal(world, trade ? "MAIN" : "ISOLATED");
+    if (args[0] === (trade ? "__chinaumsTradeAuditAdapter" : "__chinaumsAccountDetailAdapter")) assert.equal(world, "ISOLATED");
     if (args[0]?.reportType) return [{ frameId: 0, result: { isReportFrame: true } }];
     if (typeof args[0] === "object") return [{ result: { isTopFrame: true, url: tab.url } }];
     if (args.length === 1) return [{ result: true }];
     if (stopAtSubmit) {
       if (args[1] === "submitDialogState") return [{result: {status: "clear"}}];
-      if (args[1] === "setDateRange") return [{result: {status: "set"}}];
-      if (args[1] === "query") return [{result: {status: "clicked"}}];
-      if (args[1] === "queryState") return [{result: {status: "ready", count: 1,
+      if (args[1] === "query") return [{result: {status: "ready", count: 1,
         ...(trade ? {merchantId: "internal-id"} : {merchantNo})}}];
       if (args[1] === "snapshotExportTasks") return [{result: {status: "found", rows: []}}];
     }
@@ -138,10 +138,10 @@ completed.then((state) => {
   assert.equal(downloadRuns, 1);
   assert.equal(state.merchantNo, merchantNo);
   assert(elements.get("#export-target").textContent.includes(merchantNo), "both reports must display the identified merchant");
-  assert.equal(adapterInjections, 1, "replace a preexisting adapter once without resetting it for every operation");
-  assert.equal(startupCloseCalls, process.argv.includes("LIST_OPEN") ? 1 : 0,
+  assert.equal(adapterInjections, 0, "replace a preexisting adapter once without resetting it for every operation");
+  assert.equal(startupCloseCalls, 0,
     `${trade ? "trade" : "account"} startup must only touch the download list when inspect confirms it is already open`);
-  assert.equal(state.logs.filter((message) => message.startsWith("已识别本轮")).length, 1,
+  assert.equal(state.logs.filter((message) => message.startsWith("暂存接口暂未确认")).length, 1,
     "unchanged polling results must not spam the log");
   console.log(`PASS: ${prior.status} starts a fresh run and archives old state`);
 }).catch((error) => { console.error(error); process.exitCode = 1; })

@@ -20,39 +20,53 @@ async function run() {
     checkpoint:async()=>{},sleep:async()=>{},transition:async()=>{},
     invoke:async operation=>{
       calls.push(operation);
-      if(operation==='setDateRange')return{status:'set'};
       if(operation==='snapshotExportTasks')return{status:'found',rows:[...tasks]};
       if(operation==='submitExport'){
         submitted++;
         tasks.push({id:String(submitted),fileName:`89813014812B1L3_MX_2026093012000${submitted}.xlsx`});
         return{status:'accepted'};
       }
-      if(operation==='query')return{status:'clicked'};
-      if(operation==='queryState')return{status:'ready',count:132,merchantNo:'89813014812B1L3'};
+      if(operation==='query')return{status:'ready',count:132,merchantNo:'89813014812B1L3'};
       if(operation==='closeSubmitDialog')return{status:'closed'};
       throw new Error(operation);
     }
   });
-  assert.deepEqual(calls, Array(2).fill(['setDateRange','query','queryState','snapshotExportTasks','submitExport','closeSubmitDialog','snapshotExportTasks']).flat());
+  assert.deepEqual(calls, Array(2).fill(['query','snapshotExportTasks','submitExport','snapshotExportTasks']).flat());
   const emptyEvents = [];
   await context.CHINAUMS_MONTHLY_RUNNER.run({
     months, gate: {},
     checkpoint: async () => {}, sleep: async () => {}, transition: async event => emptyEvents.push(event),
     invoke: async operation => {
-      if (operation === 'setDateRange') return {status:'set'};
-      if (operation === 'query') return {status:'clicked'};
-      if (operation === 'queryState') return {status:'no_data',count:0};
+      if (operation === 'query') return {status:'no_data',count:0};
       throw new Error(`empty month must not export: ${operation}`);
     }
   });
   assert.equal(emptyEvents.filter(event => event.status === 'NO_DATA').length, months.length);
+  for (const outcome of ['failed', 'waiting', 'timeout', 'stop-after-query']) {
+    let queries = 0, stopped = false;
+    const failedEvents = [];
+    await assert.rejects(context.CHINAUMS_MONTHLY_RUNNER.run({
+      months: [months[0]], gate: {}, sleep: async () => {},
+      checkpoint: async () => { if (stopped) throw new Error('STOPPED_BY_USER'); },
+      transition: async event => failedEvents.push(event),
+      invoke: async (operation, args) => {
+        assert.equal(operation, 'query', 'unusable query results must not trigger task reads or export');
+        assert.equal(args.start, months[0].start);
+        assert.equal(args.end, months[0].end);
+        queries++;
+        if (outcome === 'timeout') throw new Error('query timed out');
+        if (outcome === 'stop-after-query') { stopped = true; return {status:'ready',count:1,merchantNo:'MERCHANT1'}; }
+        return {status:outcome,reason:'query failed'};
+      }
+    }), outcome === 'stop-after-query' ? /STOPPED_BY_USER/ : /查询/);
+    assert.equal(queries, 1);
+    if (outcome !== 'stop-after-query') assert(failedEvents.some(event => event.status === 'FAILED'));
+  }
   for (const closeFails of [false, true, 'timeout', 'stopped']) {
     let submits = 0, snapshots = 0;
     const events = [];
     const invoke = async operation => {
-      if (operation === 'setDateRange') return {status:'set'};
-      if (operation === 'query') return {status:'clicked'};
-      if (operation === 'queryState') return {status:'ready',count:1,merchantNo:'89813015722APT1',merchantId:'merchant-id'};
+      if (operation === 'query') return {status:'ready',count:1,merchantNo:'89813015722APT1',merchantId:'merchant-id'};
       if (operation === 'submitExport') { submits++; return {status:'accepted'}; }
       if (operation === 'closeSubmitDialog') {
         if (closeFails === 'timeout') throw new Error('页面操作“closeSubmitDialog”在15秒内没有响应。');
@@ -71,19 +85,11 @@ async function run() {
     };
     const promise = context.CHINAUMS_MONTHLY_RUNNER.run({months:[months[0]],gate:{},invoke,
       checkpoint:async()=>{},sleep:async()=>{},transition:async event=>events.push({...event})});
-    if (closeFails) {
-      await assert.rejects(promise, closeFails === 'timeout' ? /2026-01.*已提交.*closeSubmitDialog.*禁止重提/ :
-        closeFails === 'stopped' ? /STOPPED_BY_USER/ : /提示框关闭失败/);
-      assert.equal(snapshots, 1, 'must not read tasks while submit dialog remains open');
-      assert.ok(events.some(event => event.status === 'SUBMITTED'));
-    } else {
-      const result = await promise;
-      assert.equal(result[0].remoteTaskId, 'new-task');
-      assert.equal(snapshots, 5);
-    }
+    const result = await promise;
+    assert.equal(result[0].remoteTaskId, 'new-task');
+    assert.equal(snapshots, 5, 'task binding works regardless of page dialog state');
     assert.equal(submits, 1, 'accepted export must never be resubmitted');
   }
-  console.log('PASS: monthly trade export closes success notice and binds each new server task before starting the next month');
+  console.log('PASS: monthly trade export binds each new server task before starting the next month');
 }
 run().catch(e=>{console.error(e);process.exitCode=1;});
-

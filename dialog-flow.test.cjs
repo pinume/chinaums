@@ -13,9 +13,7 @@ async function check(stuck){
         const elapsed=now-closedAt;
         return {status:stuck||elapsed<700||(elapsed>=1200&&elapsed<1450)?'visible':'clear'};
       }
-      if(op==='setDateRange'){dates++;if(dates===2)assert(now-closedAt>=2450,'must wait for animation and a full stable second after reappearance');return {status:'set'};}
-      if(op==='query')return {status:'clicked'};
-      if(op==='queryState')return {status:'ready',count:1,merchantNo:'MERCHANT1',merchantId:'internal-id'};
+      if(op==='query'){dates++;return {status:'ready',count:1,merchantNo:'MERCHANT1',merchantId:'internal-id'};}
       if(op==='snapshotExportTasks')return {status:'found',rows:[...tasks]};
       if(op==='submitExport'){
         submits++;
@@ -25,7 +23,6 @@ async function check(stuck){
       if(op==='closeSubmitDialog'){closedAt=now;return {status:'closed'};}
       throw Error(op);
     }});
-  if(stuck){await assert.rejects(run,/未连续消失/);assert.equal(submits,1);assert.equal(dates,1);assert(events.some(e=>e.status==='SUBMITTED'));}
-  else {await run;assert.equal(submits,2);}
+  await run;assert.equal(submits,2);assert.equal(dates,2);assert.equal(closedAt,null,'must never close website dialogs');
 }
-(async()=>{await check(false);await check(true);console.log('PASS: animation wait, reappearing popup resets stable interval, stuck popup stops next month without resubmit');})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{await check(false);await check(true);console.log('PASS: visible or stuck website dialogs do not participate in API monthly flow');})().catch(e=>{console.error(e);process.exitCode=1;});

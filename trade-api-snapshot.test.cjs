@@ -3,10 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 let calls = 0;
-class Element {
-  getClientRects() { return [1]; }
-  closest() { return null; }
-}
+
 const rows = [
   {id:'task-ready', exportFileName:'MER_89813014812B06R_20261005111420_yjhx.xlsx',
     exportFilePath:'/apps/data/yjhxexport2026', exportStatus:'02', exportStatusDesc:'成功',
@@ -18,21 +15,26 @@ const rows = [
     exportFilePath:'/apps/data/yjhxexport2026', exportStatus:'02', exportStatusDesc:'成功',
     createTime:'2026-10-05 11:05:38', modifyTime:'2026-10-05 11:11:16', errorMsg:'生成失败'}
 ];
-const component = {
-  $options:{name:'table'},
-  $axiosApi:{axiosPromisePara:async () => {
+const respond = async () => {
     calls++;
     return {success:true, data:{size:100,current:0,total:241,pages:25,list:rows}};
-  }}
 };
-const table = new Element();
-table.__vue__ = {$parent:component};
+
 const context = vm.createContext({
-  Element, AbortController, Date,
-  location:{hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},
-  localStorage:{getItem:()=>null},
-  getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}),
-  document:{querySelectorAll:selector=>selector==='.el-table'?[table]:[]},
+  fetch: async (url, options) => {
+    assert.equal(options.method, "POST");
+    assert.equal(options.credentials, "same-origin");
+    assert.equal(options.headers["Content-Type"], "application/json");
+    if (url === "/uisportal/api/userPortalVerify/init") return {ok:true,json:async()=>({
+      success: true, code:"000000", data:"TEST_TOKEN"
+    })};
+    assert.equal(options.headers.userPortalToken, "TEST_TOKEN");
+    const data = await respond(JSON.parse(options.body), url.replace("/uisportal/api/", ""), options);
+    return { ok: true, status: 200, json: async () => data };
+  },
+  AbortController, Date,
+  location:{protocol:'https:',hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},
+  localStorage:{getItem:()=>"TEST_TOKEN",setItem:()=>{}},
   setTimeout, clearTimeout
 });
 vm.runInContext(fs.readFileSync(__dirname + '/trade-audit.js','utf8'), context);

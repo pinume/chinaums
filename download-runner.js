@@ -132,7 +132,6 @@
     for (const task of associatedTasks) {
       if (downloaded.has(task.fileName)) continue;
       await checkpoint();
-      const requestedAt = new Date().toISOString();
       const requested = await invoke("downloadTaskDirect", {
         taskId: task.id,
         fileName: task.fileName,
@@ -146,9 +145,10 @@
         status: "DOWNLOAD_REQUESTED",
         fileName: task.fileName,
         month: task.month,
-        submitOrder: task.submitOrder
+        submitOrder: task.submitOrder,
+        downloadId: requested.downloadId
       });
-      const completed = await invoke("confirmDownload", { fileName: task.fileName, requestedAt });
+      const completed = await invoke("confirmDownload", { fileName: task.fileName, downloadId: requested.downloadId });
       if (completed?.status !== "download_completed") {
         throw new Error(`文件 ${task.fileName} 的下载完成状态无法确认；停止后续下载。`);
       }

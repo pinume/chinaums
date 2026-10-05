@@ -20,7 +20,7 @@ const context = vm.createContext({
   Element,
   Date,
   encodeURIComponent,
-  location: { hostname: "service.chinaums.com", pathname: "/uisportal/accountCheckDetailQry/toDetail" },
+  location: { protocol: "https:", hostname: "service.chinaums.com", pathname: "/uisportal/accountCheckDetailQry/toDetail" },
   getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
   document: {
     body,
@@ -51,12 +51,8 @@ const args = {
   const adapter = context.__chinaumsAccountDetailAdapter;
   let result = await adapter("downloadTaskDirect", args);
   assert.equal(result.status, "download_requested");
-  assert.equal(appended.length, 1);
-  assert.equal(appended[0].src,
-    "/uisportal/commonController/exportDeailBill?exportId=0c057e50442143a68dbf9339784f2127");
-  assert.equal(appended[0].hidden, true);
-  assert.equal(appended[0].attributes["aria-hidden"], "true");
-  assert.equal(appended[0].removed, true);
+  assert.equal(result.url, "https://service.chinaums.com/uisportal/commonController/exportDeailBill?exportId=0c057e50442143a68dbf9339784f2127");
+  assert.equal(appended.length, 0, "adapter must not create an iframe");
 
   result = await adapter("downloadTaskDirect", { ...args, gate: { allowed: false, merchantNo } });
   assert.equal(result.status, "blocked");
@@ -64,7 +60,7 @@ const args = {
   assert.equal(result.status, "blocked");
   result = await adapter("downloadTaskDirect", { ...args, taskId: "../bad" });
   assert.equal(result.status, "blocked");
-  assert.equal(appended.length, 1, "guard failures must not start another download request");
+  assert.equal(appended.length, 0, "guard failures must not start another download request");
 
   console.log("PASS: account direct download uses exact exportId URL and blocks gate, merchant, or task identity drift");
 })().catch((error) => { console.error(error); process.exitCode = 1; });

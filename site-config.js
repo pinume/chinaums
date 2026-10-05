@@ -3,10 +3,6 @@ globalThis.CHINAUMS_SITE_CONFIG = Object.freeze({
   portalRoot: "/uisportal",
   frontendRoot: "/uisportalfront",
   targetMerchant: "北国商城股份有限公司",
-  reportRoutes: Object.freeze({
-    accountDetail: "/uisportal/accountCheckDetailQry/toDetail",
-    tradeAuditPortal: "/uisportal/rt2?p=s,service.chinaums.com/uisportalfront/%23/auditOfTrade2026"
-  }),
   mainNavigation: Object.freeze([
     { path: "/uisportal/index_r", label: "首页" },
     { path: "/uisportal/accountingCenter", label: "账务中心" },

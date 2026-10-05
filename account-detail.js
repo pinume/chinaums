@@ -1,24 +1,8 @@
 (() => {
-  const ROUTE = "/uisportal/accountCheckDetailQry/toDetail";
   let queryTracker = null;
   const clean = (value, limit = 240) => String(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
   const normalize = (value) => clean(value, 500).replace(/\s/g, "");
-  const visible = (element) => {
-    if (!(element instanceof Element)) return false;
-    if (!element.getClientRects().length) return false;
-    for (let node = element; node instanceof Element; node = node.parentElement) {
-      const style = getComputedStyle(node);
-      if (style.display === "none" || style.visibility === "hidden" ||
-        style.visibility === "collapse" || style.opacity === "0") return false;
-    }
-    return true;
-  };
-  const textOf = (element) => clean(element?.innerText || element?.textContent, 4000);
-  const exactControls = (selector, expected) => [...document.querySelectorAll(selector)]
-    .filter(visible)
-    .filter((element) => normalize(textOf(element)) === normalize(expected));
-  const onReportPage = () => location.hostname === "service.chinaums.com" && location.pathname === ROUTE;
-  const hasDownloadList = () => downloadDialogs().length === 1;
+  const onReportPage = () => location.hostname === "service.chinaums.com" && location.protocol === "https:";
   const downloadGateAllowed = (args) => args.gate?.allowed === true &&
     normalize(args.gate.merchantNo) === normalize(args.targetMerchantNo) && Boolean(args.targetMerchantNo);
   const QUERY_FIELDS = [
@@ -37,40 +21,23 @@
     if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
     return `${match[1]}${match[2]}${match[3]}`;
   };
-  const accountForm = () => {
-    const forms = [...document.querySelectorAll("form")].filter((form) =>
-      form.querySelector('[name="settDateBegin"]') && form.querySelector('[name="settDateEnd"]')
-    );
-    return forms.length === 1 ? forms[0] : null;
-  };
-  const formParams = (form, allowed = null) => {
-    const params = new URLSearchParams();
-    for (const [name, value] of new FormData(form)) {
-      if (typeof value !== "string") throw new Error(`字段 ${name} 包含非文本值。`);
-      if (!allowed || allowed.has(name)) params.append(name, value);
-    }
+  const queryParams = () => {
+    const params = new URLSearchParams(QUERY_FIELDS.map((name) => [name, ""]));
+    params.set("pageSize", "100");
+    params.set("transStatus", "1");
+    params.set("searchObj", "1");
     return params;
   };
   const buildQueryPayload = (pageNumber) => {
     if (!queryTracker?.beginSettDate || !queryTracker?.endSettDate) {
       return { error: "查询日期尚未安全设置。" };
     }
-    const form = accountForm();
-    if (!form) return { error: "对账明细查询表单缺失或不唯一。" };
-    let payload;
-    try {
-      payload = formParams(form, new Set(QUERY_FIELDS));
-    } catch (error) {
-      return { error: error.message };
-    }
-    for (const name of QUERY_FIELDS) {
-      if (!payload.has(name)) payload.set(name, "");
-    }
+    const payload = queryParams();
     payload.set("settDateBegin", queryTracker.beginSettDate);
     payload.set("settDateEnd", queryTracker.endSettDate);
     payload.set("pageNumber", String(pageNumber));
     const pageSize = Number(payload.get("pageSize"));
-    if (!Number.isInteger(pageSize) || pageSize <= 0) return { error: "查询表单中的 pageSize 无效。" };
+    if (!Number.isInteger(pageSize) || pageSize <= 0) return { error: "查询参数中的 pageSize 无效。" };
     return { payload, pageSize };
   };
   const querySignature = (payload) => {
@@ -85,6 +52,7 @@
     const rows = [];
     let totalPages = null;
     let totalElements = null;
+    let exportFees = null;
     for (let pageNumber = 1; ; pageNumber += 1) {
       if (Date.now() >= deadline) throw new Error("对账明细查询已超过截止时间。");
       const built = buildQueryPayload(pageNumber);
@@ -94,9 +62,9 @@
       }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
-      let response;
+      let data;
       try {
-        response = await fetch("/uisportal/accountCheckDetailQry/qryAccountCheck", {
+        const response = await fetch("/uisportal/accountCheckDetailQry/qryAccountCheck", {
           method: "POST",
           credentials: "same-origin",
           headers: {
@@ -106,15 +74,17 @@
           body: built.payload.toString(),
           signal: controller.signal
         });
+        if (!response?.ok || response.redirected) throw new Error(`对账明细查询接口 HTTP ${response?.status ?? "unknown"} 或登录会话失效。`);
+        data = await response.json();
+        if (controller.signal.aborted || Date.now() >= deadline) throw new Error("对账明细查询已超过截止时间。");
       } finally {
         clearTimeout(timer);
       }
-      if (!response?.ok) throw new Error(`对账明细查询接口 HTTP ${response?.status ?? "unknown"}。`);
-      const data = await response.json();
       if (String(data?.respCode ?? "") !== "000000" || !Array.isArray(data?.pageObj?.content)) {
         throw new Error("对账明细查询接口结构异常。");
       }
       const page = data.pageObj;
+      exportFees ??= { regularFee: data.regularFee, d1Fee: data.d1Fee };
       const currentPages = Number(page.totalPages);
       const currentTotal = Number(page.totalElements);
       const number = Number(page.number);
@@ -151,25 +121,21 @@
     return {
       count: totalElements,
       merchantNo: merchants[0] || null,
-      filterSignature: expectedSignature
+      filterSignature: expectedSignature,
+      ...exportFees
     };
   };
 
-  const buildExportPayload = () => {
-    if (!queryTracker?.beginSettDate || !queryTracker?.endSettDate) {
-      return { error: "已确认查询日期缺失。" };
-    }
-    const form = accountForm();
-    if (!form) return { error: "导出查询表单缺失或不唯一。" };
-    let payload;
-    try {
-      payload = formParams(form);
-    } catch (error) {
-      return { error: error.message };
-    }
-    payload.set("settDateBegin", queryTracker.beginSettDate);
-    payload.set("settDateEnd", queryTracker.endSettDate);
+  const buildExportPayload = (verified) => {
+    const built = buildQueryPayload(1);
+    if (built.error) return built;
+    const payload = built.payload;
+    if (querySignature(payload) !== verified.filterSignature) return { error: "申请前查询条件已变化。" };
+    if (payload.get("transStatus") !== "1") return { error: "当前交易状态不支持 XLSX 导出，请选择普通交易。" };
+    payload.delete("pageNumber");
     payload.set("fileExt", "xlsx");
+    payload.set("regularFee", verified.regularFee ?? "");
+    payload.set("d1Fee", verified.d1Fee ?? "");
     return { payload };
   };
   const classifyExportResponse = (data) => {
@@ -183,112 +149,40 @@
     }
     return { status: "unknown", reason: message ? `服务器返回 ${code || "无状态码"}：${message}` : "提交接口返回无法识别。" };
   };
-  const modalSelector = '[role="dialog"],[aria-modal="true"],.layui-layer,.layui-layer-dialog,.layui-layer-content,.modal,.modal-dialog,.el-dialog__wrapper,.el-dialog,.el-message-box__wrapper,.el-message-box,.placeLoad-row,.openAlert';
-  const visibleModals = () => [...document.querySelectorAll(modalSelector)].filter(visible);
-  const downloadDialogs = () => [...document.querySelectorAll(".loadSave-row")].filter(visible)
-    .filter((dialog) => {
-      const table = dialog.querySelector("table#downloadList");
-      if (!table || !visible(table)) return false;
-      const header = [...(table.querySelector("tr")?.querySelectorAll("th,td") || [])].map(textOf);
-      return /^(请求时间|创建时间)$/.test(header[0] || "") &&
-        header[1] === "文件名" && header[2] === "下载状态" && header[3] === "操作";
-    });
-  const submitMessagePattern = /申请已提交|超过\s*\d+\s*条|申请失败|导出失败|系统异常/;
-  const submitMessageVisible = () => visibleModals().some((dialog) => submitMessagePattern.test(textOf(dialog)));
-  const messageTexts = () => [...new Set([
-    ...visibleModals().map(textOf),
-    textOf(document.body)
-  ].filter(Boolean))];
-  const classifySubmit = () => {
-    const messages = messageTexts();
-    const accepted = messages.filter((text) => /申请已提交/.test(text));
-    if (accepted.length) {
-      const files = [...new Set(visibleModals().map(textOf).filter((text) => /申请已提交/.test(text)).flatMap((text) => text.match(/[A-Z0-9]+_MX_\d{14}(?:_[^\s<>"\']+)?\.xlsx/gi) || []))];
-      return { status: "accepted", fileName: files.length === 1 ? files[0] : null };
-    }
-    if (messages.some((text) => /超过\s*\d+\s*条.*(?:未处理|处理中的导出文件)/.test(text))) {
-      return { status: "throttled" };
-    }
-    if (messages.some((text) => /(?:申请失败|导出失败|系统异常)/.test(text))) {
-      return { status: "failed", message: messages.find((text) => /(?:申请失败|导出失败|系统异常)/.test(text)) };
-    }
-    return { status: "unknown" };
-  };
   globalThis.__chinaumsAccountDetailAdapter = async (operation, args = {}) => {
     if (!onReportPage()) {
-      return { status: "wrong_page", reason: "当前不是对账明细查询页。" };
+      return { status: "wrong_page", reason: "当前不是银联商务 HTTPS 网站。" };
     }
 
     switch (operation) {
-      case "submitDialogState":
-        return { status: visibleModals().filter((dialog) => textOf(dialog)).length === 0 ? "clear" : "visible" };
-      case "inspect":
-        return {
-          status: accountForm() ? "ready" : "controls_missing",
-          reason: accountForm() ? null : "对账明细查询表单缺失或不唯一。",
-          hasQuery: Boolean(accountForm()),
-          downloadListOpen: hasDownloadList()
-        };
-      case "setDateRange": {
+      case "query": {
+        queryTracker = null;
         const beginSettDate = compactDate(args.start);
         const endSettDate = compactDate(args.end);
         if (!beginSettDate || !endSettDate || beginSettDate > endSettDate) {
           return { status: "failed", reason: "日期参数无效。" };
         }
-        queryTracker = {
-          beginSettDate,
-          endSettDate,
-          resultState: "set",
-          count: null,
-          merchantNo: null,
-          filterSignature: null,
-          reason: null
-        };
-        return { status: "set", beginSettDate, endSettDate };
-      }
-      case "query": {
-        if (visibleModals().filter((dialog) => textOf(dialog)).length > 0) {
-          return { status: "blocked", reason: "弹窗尚未关闭，不启动下一次查询。" };
-        }
-        if (!queryTracker?.beginSettDate || !queryTracker?.endSettDate) {
-          return { status: "failed", reason: "查询日期尚未安全设置。" };
-        }
-        queryTracker.resultState = "querying";
+        queryTracker = { beginSettDate, endSettDate, resultState: "querying" };
         try {
           const result = await readAccountQuery(args.operationDeadline ?? Date.now() + 60000);
-          Object.assign(queryTracker, result.count === 0
-            ? { resultState: "no_data", count: 0, merchantNo: null, filterSignature: result.filterSignature, reason: null }
-            : { resultState: "ready", count: result.count, merchantNo: result.merchantNo,
-              filterSignature: result.filterSignature, reason: null });
-        } catch (error) {
-          Object.assign(queryTracker, {
-            resultState: "failed",
-            count: null,
-            merchantNo: null,
-            filterSignature: null,
-            reason: error?.name === "AbortError" ? "对账明细查询接口在截止时间前未完成。" :
-              error?.message || "对账明细查询接口调用失败。"
-          });
-        }
-        return { status: "clicked", source: "api" };
-      }
-      case "queryState": {
-        if (!queryTracker || ["set", "querying"].includes(queryTracker.resultState)) return { status: "waiting" };
-        if (queryTracker.resultState === "failed") {
-          return { status: "failed", reason: queryTracker.reason || "对账明细查询失败。" };
-        }
-        if (queryTracker.resultState === "no_data") return { status: "no_data", count: 0 };
-        if (queryTracker.resultState === "ready") {
-          const expectedMerchantNo = normalize(args.targetMerchantNo);
-          if (expectedMerchantNo && queryTracker.merchantNo !== expectedMerchantNo) {
-            return { status: "failed", reason: "当前查询结果商户号与本轮已确认商户号不一致，未申请导出。" };
+          const expectedMerchant = normalize(args.targetMerchantNo);
+          if (result.count > 0 && expectedMerchant && result.merchantNo !== expectedMerchant) {
+            throw new Error("对账明细查询结果商户身份与本轮已确认身份不一致，未申请导出。");
           }
-          return { status: "ready", count: queryTracker.count, merchantNo: queryTracker.merchantNo };
+          Object.assign(queryTracker, result, {
+            resultState: result.count === 0 ? "no_data" : "ready"
+          });
+          return result.count === 0
+            ? { status: "no_data", count: 0 }
+            : { status: "ready", count: result.count, merchantNo: result.merchantNo };
+        } catch (error) {
+          queryTracker = null;
+          return { status: "failed", reason: error?.name === "AbortError"
+            ? "对账明细查询接口在截止时间前未完成。"
+            : error?.message || "对账明细查询接口调用失败。" };
         }
-        return { status: "failed", reason: "对账明细查询结果状态无法识别。" };
       }
       case "submitExport": {
-        if (visibleModals().filter((dialog) => textOf(dialog)).length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不申请导出。" };
         const gate = args.gate;
         if (gate?.allowed !== true || normalize(gate.merchantNo) !== normalize(args.targetMerchantNo) ||
           queryTracker?.merchantNo !== normalize(args.targetMerchantNo) || !args.targetMerchantNo ||
@@ -314,7 +208,7 @@
           verified.filterSignature !== queryTracker.filterSignature) {
           return { status: "blocked", reason: "提交前接口复核发现商户、查询条件或数据状态已变化；未申请导出。" };
         }
-        const prepared = buildExportPayload();
+        const prepared = buildExportPayload(verified);
         if (prepared.error) return { status: "blocked", reason: prepared.error };
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 12000);
@@ -329,91 +223,13 @@
             body: prepared.payload.toString(),
             signal: controller.signal
           });
-          if (!response.ok) return { status: "unknown", reason: `提交接口 HTTP ${response.status}。` };
+          if (!response.ok || response.redirected) return { status: "unknown", reason: `提交接口 HTTP ${response.status} 或登录会话失效。` };
           return classifyExportResponse(await response.json());
         } catch (error) {
           return { status: "unknown", reason: error?.name === "AbortError" ? "提交接口 12 秒内未返回。" : error?.message || "提交接口调用失败。" };
         } finally {
           clearTimeout(timer);
         }
-      }
-      case "classifySubmit":
-        return classifySubmit();
-      case "closeSubmitDialog": {
-        const result = classifySubmit();
-        if (visibleModals().filter((dialog) => textOf(dialog)).length === 0) return { status: "closed" };
-        if (!["accepted", "throttled", "failed"].includes(result.status)) {
-          return { status: "blocked", reason: "没有可安全关闭的已识别提交提示。" };
-        }
-        const submitModals = visibleModals().filter((dialog) => submitMessagePattern.test(textOf(dialog)));
-        const closeLabels = result.status === "accepted" ? ["关闭"] : ["关闭", "确定", "确认"];
-        const normalizedLabels = closeLabels.map(normalize);
-        const matchingMessageNodes = [...document.querySelectorAll("*")]
-          .filter(visible)
-          .filter((element) => submitMessagePattern.test(textOf(element)));
-        const messageLeaves = matchingMessageNodes.filter((element) =>
-          ![...element.children].some((child) => visible(child) && submitMessagePattern.test(textOf(child)))
-        );
-        const messageRoots = messageLeaves.map((message) => {
-          let ancestor = message;
-          for (let depth = 0; ancestor && depth < 12; depth += 1, ancestor = ancestor.parentElement) {
-            const ancestorText = normalize(textOf(ancestor));
-            if (submitMessagePattern.test(textOf(ancestor)) && normalizedLabels.some((label) => ancestorText.includes(label))) {
-              return ancestor;
-            }
-          }
-          return null;
-        }).filter(Boolean);
-        const submitRoots = [...new Set([...submitModals, ...messageRoots])];
-        const findTextTargets = (roots) => [...new Set(roots.flatMap((root) => [root, ...root.querySelectorAll("*")]))]
-          .filter(visible)
-          .filter((element) => normalizedLabels.includes(normalize(textOf(element))))
-          .filter((element) => ![...element.children].some((child) =>
-            visible(child) && normalizedLabels.includes(normalize(textOf(child)))
-          ));
-        const findCloseIcons = (roots) => {
-          const candidates = [...new Set(roots.flatMap((dialog) => [
-            ...dialog.querySelectorAll(".layui-layer-close,.layui-layer-setwin a,button.el-dialog__headerbtn,.el-dialog__close,[aria-label='关闭'],[aria-label='Close'],[title='关闭'],[title='Close']")
-          ]))].filter(visible);
-          const controls = candidates.filter((element) => element.matches("button,a,[role=button],[onclick]"));
-          return controls.length ? controls : candidates;
-        };
-        const scopedTextMatches = findTextTargets(submitRoots);
-        const pageTextMatches = findTextTargets([document.body]);
-        const modalControls = exactControls("button,a,[role=button],[onclick],.layui-layer-btn a,.layui-layer-btn0", "关闭")
-          .filter((element) => submitRoots.some((dialog) => dialog.contains(element)));
-        const pageControls = closeLabels.flatMap((label) =>
-          exactControls("button,a,[role=button],[onclick],.layui-layer-btn a,.layui-layer-btn0", label)
-        );
-        let matches = scopedTextMatches.length ? scopedTextMatches : modalControls;
-        if (!matches.length) matches = pageTextMatches.length ? pageTextMatches : pageControls;
-        if (matches.length !== 1) {
-          const closeIcons = findCloseIcons(submitRoots);
-          if (closeIcons.length === 1) matches = closeIcons;
-        }
-        if (matches.length !== 1) return { status: "blocked", reason: "提交提示中的关闭按钮缺失或不唯一。" };
-        matches[0].click();
-        const waitForNoticeToClose = async (milliseconds) => {
-          const deadline = Date.now() + milliseconds;
-          while (submitMessageVisible() && Date.now() < deadline) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-          }
-          return !submitMessageVisible();
-        };
-        if (!await waitForNoticeToClose(2500)) {
-          const currentModals = visibleModals().filter((dialog) => submitMessagePattern.test(textOf(dialog)));
-          const fallbackRoots = [...new Set([...currentModals, ...submitRoots])];
-          const fallbackIcons = findCloseIcons(fallbackRoots);
-          if (fallbackIcons.length === 1) fallbackIcons[0].click();
-          if (!await waitForNoticeToClose(1500)) {
-            document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 27, which: 27, bubbles: true }));
-            await waitForNoticeToClose(1500);
-          }
-        }
-        if (submitMessageVisible()) {
-          return { status: "clicked_but_still_visible", reason: "点击关闭按钮和弹窗右上角后提示仍显示。" };
-        }
-        return { status: "closed" };
       }
       case "snapshotExportTasks": {
         const deadline = args.operationDeadline ?? Date.now() + 15000;
@@ -464,19 +280,6 @@
           clearTimeout(timer);
         }
       }
-      case "closeDownloadList": {
-        const dialogMatches = downloadDialogs();
-        if (dialogMatches.length === 0) return { status: "already_closed" };
-        if (dialogMatches.length !== 1) return { status: "blocked", reason: "下载暂存列表弹窗不唯一，未关闭。" };
-        const dialog = dialogMatches[0];
-        const candidates = [...new Set([
-          ...dialog.querySelectorAll(".placeLoad-header .close-Load"),
-          ...exactControls("button,a,[role=button]", "关闭").filter((element) => dialog.contains(element))
-        ])].filter(visible);
-        if (candidates.length !== 1) return { status: "blocked", reason: "下载暂存列表右上角关闭控件缺失或不唯一。" };
-        candidates[0].click();
-        return { status: "closed" };
-      }
       case "downloadTaskDirect": {
         if (!downloadGateAllowed(args)) return { status: "blocked", reason: "商户门禁未通过，不允许下载。" };
         const fileMatch = String(args.fileName || "").match(/^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
@@ -487,17 +290,10 @@
         if (!/^[0-9a-f]{32}$/i.test(taskId)) {
           return { status: "blocked", reason: "暂存任务 ID 格式无效。" };
         }
-        const frame = document.createElement("iframe");
-        frame.hidden = true;
-        frame.setAttribute("aria-hidden", "true");
-        frame.src = `/uisportal/commonController/exportDeailBill?exportId=${encodeURIComponent(taskId)}`;
-        document.body.append(frame);
-        setTimeout(() => frame.remove(), 60000);
-        return { status: "download_requested" };
+        return { status: "download_requested", url: `https://service.chinaums.com/uisportal/commonController/exportDeailBill?exportId=${encodeURIComponent(taskId)}` };
       }
       default:
         return { status: "unknown_operation" };
     }
   };
 })();
-

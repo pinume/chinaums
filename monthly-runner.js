@@ -32,67 +32,26 @@
       return result;
     };
 
-    const waitForDialogClear = async () => {
-      if (!["account-detail", "trade-audit"].includes(reportType)) return;
-      const deadline = now() + 10000;
-      let clearSince = null;
-      while (now() < deadline) {
-        await checkpoint();
-        const result = await invoke("submitDialogState", {});
-        if (result?.status === "clear") {
-          clearSince ??= now();
-          if (now() - clearSince >= 1000) return;
-        } else if (result?.status === "visible") {
-          clearSince = null;
-        } else {
-          throw new Error("弹窗状态无法确认，未继续页面操作。");
-        }
-        await sleep(250);
-      }
-      throw new Error("弹窗未连续消失并稳定1秒，未继续下个月或申请导出；已受理任务禁止重提。");
-    };
-
     for (const month of months) {
       await checkpoint();
-      await waitForDialogClear();
-      await transition({ month: month.key, status: "SETTING_DATE" });
-      const setDate = await invoke("setDateRange", { start: month.start, end: month.end });
-      if (setDate?.status !== "set") {
-        await setMonthState(month, "FAILED", { reason: setDate?.reason || "无法确认日期范围。" });
-        throw new Error(`${month.key} 日期设置失败：${setDate?.reason || "状态未确认"}`);
-      }
-
-      await transition({ month: month.key, status: "STARTING_QUERY" });
-      let query;
+      await transition({ month: month.key, status: "QUERYING" });
+      let queryState;
       try {
-        query = await invoke("query", {});
+        queryState = await invoke("query", {
+          start: month.start, end: month.end,
+          targetMerchantNo: activeMerchantNo || null, targetMerchantId: activeMerchantId
+        });
       } catch (error) {
         if (error?.message === "STOPPED_BY_USER") throw error;
         const reason = `查询调用失败或超时：${error?.message || "页面未响应"}`;
         await setMonthState(month, "FAILED", { reason });
         throw new Error(`${month.key} 查询调用未能确认：${error?.message || "页面未响应"}`);
       }
-      if (query?.status !== "clicked") {
-        await setMonthState(month, "FAILED", { reason: query?.reason || "查询按钮状态未确认。" });
-        throw new Error(`${month.key} 查询未能安全启动。`);
-      }
-      await transition({ month: month.key, status: "QUERYING" });
-
-      const queryDeadline = now() + 120000;
-      let queryState = { status: "waiting" };
-      while (now() < queryDeadline) {
-        await checkpoint();
-        queryState = await invoke("queryState", { targetMerchantNo: activeMerchantNo || null, targetMerchantId: activeMerchantId });
-        if (queryState?.status === "failed") {
-          await setMonthState(month, "FAILED", { reason: queryState.reason || "查询过程出现无法确认的状态。" });
-          throw new Error(`${month.key} 查询状态异常：${queryState.reason || "已停止"}`);
-        }
-        if (["ready", "no_data"].includes(queryState?.status)) break;
-        await sleep(1000);
-      }
+      await checkpoint();
       if (!["ready", "no_data"].includes(queryState?.status)) {
-        await setMonthState(month, "FAILED", { reason: "两分钟内没有取得明确的查询完成状态；查询没有触发导出申请。" });
-        throw new Error(`${month.key} 查询结果状态无法确认；为防止错月导出，已暂停。`);
+        const reason = queryState?.reason || "查询结果状态无法确认，未申请导出。";
+        await setMonthState(month, "FAILED", { reason });
+        throw new Error(`${month.key} 查询失败：${reason}`);
       }
       if (queryState.status === "ready") {
         const actualMerchantNo = String(queryState.merchantNo || "").replace(/\s/g, "").toUpperCase();
@@ -132,7 +91,6 @@
       let submitted = false;
       while (!submitted) {
         await checkpoint();
-        await waitForDialogClear();
         const baseline = await invoke("snapshotExportTasks", {});
         if (baseline?.status !== "found" || !Array.isArray(baseline.rows)) throw new Error(`${month.key} 无法读取申请前暂存任务；未申请导出。`);
         const previousIds = new Set(baseline.rows.map((row) => row.id));
@@ -145,9 +103,9 @@
           if (error?.message === "STOPPED_BY_USER") throw error;
           submit = { status: "unknown", reason: error?.message || "提交调用未响应" };
         }
-        if (["blocked", "wrong_page", "controls_missing"].includes(submit?.status)) {
-          await setMonthState(month, "FAILED", { reason: submit?.reason || "导出控件未通过门禁检查。" });
-          throw new Error(`${month.key} 导出已锁定：${submit?.reason || "控件状态未确认"}`);
+        if (["blocked", "wrong_page"].includes(submit?.status)) {
+          await setMonthState(month, "FAILED", { reason: submit?.reason || "导出请求未通过门禁检查。" });
+          throw new Error(`${month.key} 导出已锁定：${submit?.reason || "请求状态未确认"}`);
         }
 
         const response = ["accepted", "throttled", "failed"].includes(submit?.status)
@@ -158,21 +116,6 @@
           const accepted = await setMonthState(month, "SUBMITTED", { submittedAt: attemptedAt, remoteFileName: response.fileName || null, count: queryState.count });
           throttleAttempts = 0;
           submitted = true;
-          let closed = { status: "unknown" };
-          for (let closeAttempt = 0; closeAttempt < 3; closeAttempt += 1) {
-            try {
-              closed = await invoke("closeSubmitDialog", {});
-            } catch (error) {
-              if (error?.message === "STOPPED_BY_USER") throw error;
-              throw new Error(`${month.key} 已确认服务器接受申请；本月已记为已提交，关闭提示操作未完成（${error?.message || "页面未响应"}）；禁止重提。`);
-            }
-            if (closed?.status === "closed") break;
-            await sleep(350);
-          }
-          if (closed?.status !== "closed") {
-            throw new Error(`${month.key} 已确认服务器接受申请；本月已记为已提交，提示框关闭失败（${closed?.reason || closed?.status || "未知状态"}）。`);
-          }
-          await waitForDialogClear();
           const deadline = now() + 15000;
           let task = null;
           let snapshotReason = "";
@@ -219,11 +162,6 @@
         }
 
         if (response?.status === "throttled") {
-          const closed = await invoke("closeSubmitDialog", {});
-          if (closed?.status !== "closed") {
-            await setMonthState(month, "UNKNOWN", { reason: "识别到限流，但提示无法安全关闭。" });
-            throw new Error(`${month.key} 限流提示未能安全关闭，已暂停。`);
-          }
           throttleAttempts += 1;
           const waitMs = Math.min(30000 * 2 ** (throttleAttempts - 1), 120000);
           await transition({ month: month.key, status: "WAITING_FOR_SLOT", retryInMs: waitMs, attempt: throttleAttempts });
@@ -274,9 +212,7 @@
         }
 
         if (response?.status === "failed") {
-          const closed = await invoke("closeSubmitDialog", {});
           await setMonthState(month, "FAILED", { reason: response.message || "服务器明确拒绝了申请。" });
-          if (closed?.status !== "closed") await transition({ month: month.key, status: "FAILED_DIALOG_REMAINS" });
           throw new Error(`${month.key} 导出失败：${response.message || "服务器返回明确失败"}`);
         }
 
@@ -321,4 +257,3 @@
     run
   });
 })();
-

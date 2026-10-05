@@ -12,17 +12,22 @@ const merchant = 'MERCHANT1';
 const months = [1, 2].map(n => ({key: `2026-0${n}`, start: `2026-0${n}-01`, end: `2026-0${n}-28`}));
 async function check(mode, trade = false) {
   const tasks = [{id: 'old', fileName: 'old.xlsx'}];
-  let submits = 0, accepted = 0, current, delayed = false;
+  let submits = 0, accepted = 0, queries = 0, current, delayed = false;
   const throttles = new Map();
   const events = [];
   const result = context.CHINAUMS_MONTHLY_RUNNER.run({months, gate: {},
     checkpoint: async () => {}, sleep: async ms => {now += ms;},
     transition: async e => {events.push({...e}); if(e.month) current = e.month;},
     invoke: async (operation, args) => {
-      if(operation === 'setDateRange') return {status:'set'};
-      if(operation === 'query') return {status:'clicked'};
-      if(operation === 'queryState') return {status:'ready',count:1,
-        ...(trade ? {merchantId: mode === 'switch-id' && accepted ? 'changed-id' : 'internal-id'} : {merchantNo:merchant})};
+      if(operation === 'query') {
+        const month = months[queries++];
+        assert.equal(args.start, month.start);
+        assert.equal(args.end, month.end);
+        assert.equal(args.targetMerchantNo, accepted ? merchant : null);
+        assert.equal(args.targetMerchantId, trade && accepted ? 'internal-id' : null);
+        return {status:'ready',count:1,
+          ...(trade ? {merchantId: mode === 'switch-id' && accepted ? 'changed-id' : 'internal-id'} : {merchantNo:merchant})};
+      }
       if(operation === 'snapshotExportTasks') {
         if(mode === 'baseline-error' && !submits) throw new Error('baseline unavailable');
         if(delayed) { delayed = false; return {status:'found',rows:tasks.slice(0,-1)}; }
@@ -55,6 +60,7 @@ async function check(mode, trade = false) {
     if(mode === 'ambiguous') assert(events.some(e=>e.status==='SUBMITTED'));
   } else {
     const rows = await result;
+    assert.equal(queries, months.length, 'each month queries exactly once, including when submissions are throttled');
     assert.equal(rows.length,2);
     assert.equal(new Set(rows.map(r=>r.remoteFileName)).size,2);
     assert.deepEqual(Array.from(rows,r=>r.remoteTaskId),months.map(m=>m.key));
@@ -63,21 +69,12 @@ async function check(mode, trade = false) {
       assert.equal(submits,7);
       assert.deepEqual(waits.map(e=>e.retryInMs),[30000,60000,120000,120000,30000]);
       assert.deepEqual(waits.map(e=>e.month),['2026-01','2026-01','2026-01','2026-01','2026-02']);
-      assert.equal(events.filter(e=>e.status==='SETTING_DATE').length,2);
+      assert.equal(events.filter(e=>e.status==='QUERYING').length,2);
     }
   }
 }
 (async()=>{
   for(const trade of [false,true]) for(const mode of ['normal','delayed','throttle','ambiguous','baseline-error']) await check(mode,trade);
   await check('switch-id',true);
-  // The native account limit uses .openAlert and must remain visible beyond a long background page.
-  for(const [file, name, text] of [['account-detail.js','__chinaumsAccountDetailAdapter','您已有超过3条未处理或处理中的导出文件，请稍后再试'],['trade-audit.js','__chinaumsTradeAuditAdapter','超过 10 条申请在处理中']]) {
-    class Element {constructor(value=text){this.value=value;} getClientRects(){return [1];} get innerText(){return this.value;}}
-    const dialog = new Element();
-    const c=vm.createContext({Element,location:{hostname:'service.chinaums.com',pathname:file.startsWith('trade')?'/uisportalfront/':'/uisportal/accountCheckDetailQry/toDetail',hash:'#/auditOfTrade2026'},
-      getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}), document:{body:file.startsWith('account')?new Element('background '.repeat(500)):dialog,querySelectorAll:selector=>file.startsWith('account')?(selector.includes('.openAlert')?[dialog]:[]):[dialog]}});
-    vm.runInContext(fs.readFileSync(`${__dirname}/${file}`,'utf8'),c);
-    assert.equal((await c[name]('classifySubmit')).status,'throttled');
-  }
-  console.log('PASS: direct submit preserves consecutive task IDs, delayed task binding, throttling, merchant ID changes and numeric limit dialogs');
+  console.log('PASS: direct submit preserves consecutive task IDs, delayed task binding, throttling, merchant ID changes');
 })().catch(e=>{console.error(e);process.exitCode=1;});
