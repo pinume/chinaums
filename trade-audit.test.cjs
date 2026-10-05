@@ -8,7 +8,6 @@ class Element {
   querySelectorAll() { return []; }
   querySelector() { return null; }
 }
-const table = new Element();
 let mode = "paged";
 let token = "TEST_TOKEN";
 const calls = [];
@@ -18,25 +17,27 @@ const makeRows = (count, current) => Array.from({ length: count }, (_, index) =>
   mchntId: mode === "mixed" && current === 1 && index === 0 ? "other-merchant" : merchantId,
   transDate: mode === "bad-date" && current === 0 && index === 0 ? "20260831" : "20260915"
 }));
-const component = {
-  $options: { name: "table" },
-  $axiosApi: {
-    axiosPromisePara: async (payload, endpoint, options) => {
-      calls.push({ payload: JSON.parse(JSON.stringify(payload)), endpoint, options });
-      assert.equal(endpoint, "uis-tradein-server/portal/yjhx/v3/queryList");
-      if (mode === "api-error") return { success: false, code: "999999", message: "系统异常", data: null };
-      if (mode === "no-data") {
-        return { success: true, code: "000000", message: "成功",
-          data: { size: 10, current: 0, total: 0, pages: 0, list: [] } };
-      }
-      const current = payload.current;
-      const list = current === 0 ? makeRows(10, 0) : makeRows(8, 1);
-      return { success: true, code: "000000", message: "成功",
-        data: { size: 10, current, total: 18, pages: 2, list } };
-    }
+const fetch = async (url, options) => {
+  assert.equal(url, "/uisportal/api/uis-tradein-server/portal/yjhx/v3/queryList");
+  assert.equal(options.method, "POST");
+  assert.equal(options.credentials, "same-origin");
+  assert.equal(options.headers["Content-Type"], "application/json;charset=UTF-8");
+  assert.equal(options.headers.userPortalToken, "TEST_TOKEN");
+  const payload = JSON.parse(options.body);
+  calls.push({ payload, url, options });
+  let data;
+  if (mode === "api-error") data = { success: false, code: "999999", message: "系统异常", data: null };
+  else if (mode === "no-data") {
+    data = { success: true, code: "000000", message: "成功",
+      data: { size: 10, current: 0, total: 0, pages: 0, list: [] } };
+  } else {
+    const current = payload.current;
+    const list = current === 0 ? makeRows(10, 0) : makeRows(8, 1);
+    data = { success: true, code: "000000", message: "成功",
+      data: { size: 10, current, total: 18, pages: 2, list } };
   }
+  return { ok: true, status: 200, json: async () => data };
 };
-table.__vue__ = { $parent: component };
 
 const context = vm.createContext({
   Element,
@@ -45,14 +46,8 @@ const context = vm.createContext({
   localStorage: { getItem: (key) => { assert.equal(key, "userPortalVerifyToken"); return token; } },
   location: { hostname: "service.chinaums.com", pathname: "/uisportalfront/", hash: "#/auditOfTrade2026" },
   getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
-  document: {
-    body: new Element(),
-    documentElement: new Element(),
-    querySelectorAll(selector) {
-      if (selector === ".el-table") return [table];
-      return [];
-    }
-  },
+  document: { body: new Element(), documentElement: new Element(), querySelectorAll: () => [] },
+  fetch,
   setTimeout,
   clearTimeout
 });
