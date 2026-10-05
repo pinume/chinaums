@@ -142,8 +142,11 @@
       payload.append(name, value);
     }
     payload.set("fileExt", "xlsx");
-    if (payload.get("settDateBegin") !== expectedBegin || payload.get("settDateEnd") !== expectedEnd) {
-      return { error: "导出表单中的清算日期与刚刚确认的查询结果不一致。" };
+    const beginValues = payload.getAll("settDateBegin");
+    const endValues = payload.getAll("settDateEnd");
+    if (beginValues.length !== 1 || endValues.length !== 1 ||
+      beginValues[0] !== expectedBegin || endValues[0] !== expectedEnd) {
+      return { error: "导出表单中的清算日期与刚刚确认的查询结果不一致或不唯一。" };
     }
     return { payload };
   };
