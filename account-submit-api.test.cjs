@@ -54,6 +54,7 @@ class FormData {
 
 let exportResponse = { respDesc: "对账明细下载成功", respCode: "000000" };
 let queryMerchant = merchantNo;
+let queryCount = 1;
 let queryCalls = 0;
 let exportCalls = 0;
 let lastExportRequest = null;
@@ -85,9 +86,14 @@ const context = vm.createContext({
         respCode: "000000",
         respDesc: "通用对账明细查询成功",
         pageObj: {
-          content: [{ rownum_: 1, mer_no: queryMerchant, sett_date: payload.get("settDateBegin") }],
+          content: Array.from({ length: queryCount }, (_, index) => ({
+            rownum_: index + 1,
+            mer_no: queryMerchant,
+            sett_date: payload.get("settDateBegin"),
+            bankorder: `order-${index + 1}`
+          })),
           totalPages: 1,
-          totalElements: 1,
+          totalElements: queryCount,
           number: 0,
           size: 5
         }
@@ -134,6 +140,14 @@ const submit = (adapter) => adapter("submitExport", {
   assert.equal(body.get("searchObj"), "1");
   assert.equal(body.get("fileExt"), "xlsx");
   assert.deepEqual([...body.keys()], fieldNames);
+
+  queryCount = 2;
+  const exportsBeforeCountDrift = exportCalls;
+  result = await submit(adapter);
+  assert.equal(result.status, "blocked", "changed account result count must block before downDeailBill");
+  assert.match(result.reason, /数据状态已变化/);
+  assert.equal(exportCalls, exportsBeforeCountDrift);
+  queryCount = 1;
 
   queryMerchant = "OTHER";
   const exportsBeforeSwitch = exportCalls;
