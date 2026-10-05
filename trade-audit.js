@@ -71,30 +71,39 @@
     }
     return { status: "unknown" };
   };
-  const reportComponent = () => [...document.querySelectorAll(".el-table")]
-    .filter((table) => !table.closest(".el-dialog"))
-    .map((table) => table.__vue__?.$parent)
-    .find((component) => component?.$options?.name === "table");
-  const readQueryList = async (beginTransDate, endTransDate, deadline) => {
-    const component = reportComponent();
-    if (!component?.$axiosApi?.axiosPromisePara) throw new Error("以旧换新查询接口不可用。");
+  const tradePost = async (endpoint, payload, deadline) => {
     const userPortalToken = localStorage.getItem("userPortalVerifyToken");
     if (!userPortalToken) throw new Error("页面登录令牌不可用。");
+    if (Date.now() >= deadline) throw new Error("以旧换新接口调用已超过截止时间。");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
-    const checkDeadline = () => {
-      if (controller.signal.aborted || Date.now() >= deadline) {
-        controller.abort();
-        throw new Error("以旧换新查询已超过截止时间。");
-      }
-    };
     try {
-      const rows = [];
+      const response = await fetch(`/uisportal/api/uis-tradein-server/portal/yjhx/v3/${endpoint}`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json;charset=UTF-8",
+          userPortalToken
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!response?.ok) throw new Error(`以旧换新接口 HTTP ${response?.status ?? "unknown"}。`);
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const readQueryList = async (beginTransDate, endTransDate, deadline) => {
+    const checkDeadline = () => {
+      if (Date.now() >= deadline) throw new Error("以旧换新查询已超过截止时间。");
+    };
+    const rows = [];
       let expectedTotal = null;
       let expectedPages = null;
       for (let current = 0; ; current += 1) {
         checkDeadline();
-        const response = await component.$axiosApi.axiosPromisePara({
+        const response = await tradePost("queryList", {
           merOrderId: "",
           transRef: "",
           status: [],
@@ -102,11 +111,7 @@
           endTransDate,
           current,
           size: 10
-        }, "uis-tradein-server/portal/yjhx/v3/queryList", {
-          signal: controller.signal,
-          timeout: Math.max(1, deadline - Date.now()),
-          headers: { userPortalToken }
-        });
+        }, deadline);
         checkDeadline();
         if (response?.success !== true || String(response.code ?? "") !== "000000" ||
           !Array.isArray(response.data?.list)) {
@@ -145,9 +150,6 @@
         throw new Error("查询结果没有唯一商户身份；未申请导出。");
       }
       return { count: expectedTotal, merchantId: merchants[0] || null };
-    } finally {
-      clearTimeout(timer);
-    }
   };
   const downloadDialogComponent = (dialog) => {
     const instance = dialog.closest(".el-dialog__wrapper")?.__vue__;
@@ -168,7 +170,7 @@
       case "submitDialogState":
         return { status: dialogTexts().length === 0 ? "clear" : "visible" };
       case "inspect": {
-        const apiReady = Boolean(reportComponent()?.$axiosApi?.axiosPromisePara);
+        const apiReady = typeof fetch === "function";
         return {
           status: apiReady ? "ready" : "controls_missing",
           reason: apiReady ? null : "以旧换新查询接口不可用。",
@@ -245,10 +247,6 @@
           queryTracker.merchantId !== args.targetMerchantId) {
           return { status: "blocked", reason: "当前商户身份无法确认或已切换；未申请导出。" };
         }
-        const component = reportComponent();
-        if (!component?.$axiosApi?.axiosPromisePara) {
-          return { status: "blocked", reason: "页面导出接口不可用，未申请导出。" };
-        }
         try {
           const verifyDeadline = Math.min(
             (args.operationDeadline ?? Date.now() + 60000) - 12000,
@@ -268,17 +266,13 @@
           return { status: "blocked", reason: "页面登录令牌不可用，未申请导出。" };
         }
         try {
-          const response = await component.$axiosApi.axiosPromisePara({
+          const response = await tradePost("applyExport", {
             merOrderId: "",
             transRef: "",
             statusList: [],
             beginTransDate: queryTracker.beginTransDate,
             endTransDate: queryTracker.endTransDate
-          }, "uis-tradein-server/portal/yjhx/v3/applyExport", {
-            signal: AbortSignal.timeout(Math.max(1, Math.min(12000,
-              (args.operationDeadline ?? Date.now() + 12000) - Date.now()))),
-            headers: { userPortalToken }
-          });
+          }, Math.min(args.operationDeadline ?? Date.now() + 12000, Date.now() + 12000));
           const code = String(response?.code ?? "");
           const message = clean(response?.message, 500);
           if (response?.success === true && code === "000000") {
@@ -323,18 +317,11 @@
       }
       case "snapshotExportTasks": {
         const deadline = args.operationDeadline ?? Date.now() + 15000;
-        const controller = new AbortController();
         const checkDeadline = () => {
-          if (controller.signal.aborted || Date.now() >= deadline) {
-            controller.abort();
-            throw new Error("暂存任务读取已超过截止时间。");
-          }
+          if (Date.now() >= deadline) throw new Error("暂存任务读取已超过截止时间。");
         };
         checkDeadline();
-        const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
         try {
-          const component = reportComponent();
-          if (!component?.$axiosApi?.axiosPromisePara) throw new Error("无法读取以旧换新暂存接口。");
           const day = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
           const today = new Date();
           const start = new Date(today); start.setDate(start.getDate() - 7);
@@ -343,14 +330,10 @@
           const rows = [];
           for (let current = 0; current < 100; current += 1) {
             checkDeadline();
-            const response = await component.$axiosApi.axiosPromisePara({
+            const response = await tradePost("qryExportDtls", {
               searchObj: "1", size: 100, current,
               beginApplyDate: `${day(start)} 00:00:00`, endApplyDate: `${day(today)} 23:59:59`
-            }, "uis-tradein-server/portal/yjhx/v3/qryExportDtls", {
-              signal: controller.signal,
-              timeout: Math.max(1, deadline - Date.now()),
-              headers: { userPortalToken: localStorage.getItem("userPortalVerifyToken") }
-            });
+            }, deadline);
             checkDeadline();
             if (!response?.success || !Array.isArray(response.data?.list)) throw new Error("以旧换新暂存接口结构异常。");
             rows.push(...response.data.list.map((row) => {
@@ -380,8 +363,6 @@
             }
           }
           throw new Error("以旧换新暂存任务页数超出读取范围。");
-        } finally {
-          clearTimeout(timer);
         }
       }
       case "closeDownloadList": {
