@@ -123,7 +123,8 @@
     if (reportType === "account-detail") {
       const readyById = new Map(readyApiTasks.map((row) => [String(row.id || ""), row]));
       const orderedMonths = [...submittedMonths].sort((left, right) => left.submittedAt.localeCompare(right.submittedAt));
-      const downloaded = new Set(submittedMonths.map((month) => month.downloadedFileName).filter(Boolean));
+      const downloaded = new Set(submittedMonths.map((month) => month.downloadedFileName)
+        .filter((fileName) => requestedFiles.has(fileName)));
       const associatedTasks = orderedMonths.map((month, index) => ({
         ...readyById.get(String(month.remoteTaskId || "")),
         month: month.month || null,
@@ -150,7 +151,7 @@
         downloaded.add(task.fileName);
         await transition({ status: "DOWNLOAD_COMPLETED", fileName: task.fileName, month: task.month, downloadId: completed.downloadId });
       }
-      if (downloaded.size !== expectedCount) {
+      if ([...requestedFiles].some((fileName) => !downloaded.has(fileName))) {
         throw new Error("对账明细直接下载未覆盖全部本轮任务；已停止后续操作。");
       }
       await transition({ status: "DOWNLOAD_REQUESTS_SENT", count: associatedTasks.length });
