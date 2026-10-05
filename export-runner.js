@@ -309,7 +309,7 @@ const injectedAdapters = new Set();
 const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => {
   await checkpoint();
   if (operation === "confirmDownload") return waitForDownload(args);
-  const defaultLimit = reportType === "trade-audit" && operation === "query" ? 60000 : 15000;
+  const defaultLimit = reportType === "trade-audit" && ["query", "submitExport"].includes(operation) ? 60000 : 15000;
   const operationDeadline = Math.min(Date.now() + defaultLimit, args.operationDeadline ?? Infinity);
   const checkDeadline = () => {
     if (Date.now() >= operationDeadline) throw new Error(`页面操作“${operation}”已超过截止时间。`);
