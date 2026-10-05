@@ -416,7 +416,8 @@ const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMercha
           const alreadyBound = Object.values(state?.months || {}).some((month) =>
             month.remoteTaskId === row.id || month.remoteFileName === row.fileName
           );
-          if (!fileMatch || normalize(fileMatch[1]) !== merchantNo || !Number.isFinite(createdAtMs) ||
+          if (!/^[0-9a-f]{32}$/i.test(String(row.id || "")) ||
+            !fileMatch || normalize(fileMatch[1]) !== merchantNo || !Number.isFinite(createdAtMs) ||
             createdAtMs < attemptedAtMs - 2000 || createdAtMs > Date.now() + 2000 || alreadyBound) {
             return { status: "unknown", reason: "唯一新增暂存任务的商户、时间或身份校验未通过；不自动重提。" };
           }
