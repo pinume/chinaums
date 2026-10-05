@@ -31,9 +31,6 @@ async function check(mode, trade = false) {
       if(operation === 'submitExport') {
         submits++;
         if(trade) assert.equal(args.targetMerchantId,'internal-id');
-        return {status:'clicked'};
-      }
-      if(operation === 'classifySubmit') {
         if(mode === 'throttle') {
           const attempts = throttles.get(current) || 0;
           if(attempts < (current === months[0].key ? 4 : 1)) {
@@ -82,5 +79,5 @@ async function check(mode, trade = false) {
     vm.runInContext(fs.readFileSync(`${__dirname}/${file}`,'utf8'),c);
     assert.equal((await c[name]('classifySubmit')).status,'throttled');
   }
-  console.log('PASS: consecutive task IDs, overlapping timestamps, delayed listing, throttling, merchant ID changes and numeric limit dialogs');
+  console.log('PASS: direct submit preserves consecutive task IDs, delayed task binding, throttling, merchant ID changes and numeric limit dialogs');
 })().catch(e=>{console.error(e);process.exitCode=1;});
