@@ -469,6 +469,10 @@
         if (!component?.$axiosApi?.axiosPromisePara) {
           return { status: "blocked", reason: "页面导出接口不可用，未申请导出。" };
         }
+        const userPortalToken = localStorage.getItem("userPortalVerifyToken");
+        if (!userPortalToken) {
+          return { status: "blocked", reason: "页面登录令牌不可用，未申请导出。" };
+        }
         try {
           const response = await component.$axiosApi.axiosPromisePara({
             merOrderId: "",
@@ -479,7 +483,7 @@
           }, "uis-tradein-server/portal/yjhx/v3/applyExport", {
             signal: AbortSignal.timeout(Math.max(1, Math.min(12000,
               (args.operationDeadline ?? Date.now() + 12000) - Date.now()))),
-            headers: { userPortalToken: localStorage.getItem("userPortalVerifyToken") }
+            headers: { userPortalToken }
           });
           const code = String(response?.code ?? "");
           const message = clean(response?.message, 500);
