@@ -31,8 +31,11 @@ async function check(trade, stuck) {
         if(args.operationDeadline)assert(args.operationDeadline>wall,'adapter receives a wall-clock deadline even after pauses');
         return {status:'found',rows:tasks};
       }
-      if(op==='submitExport'){submitted++;return {status:'clicked'};}
-      if(op==='classifySubmit'){tasks=[{id:'1',fileName:file}];return {status:'accepted'};}
+      if(op==='submitExport'){
+        submitted++;
+        tasks=[{id:'1',fileName:file}];
+        return {status:'accepted'};
+      }
       if(op==='closeSubmitDialog')return {status:'closed'};
       throw Error(op);
     }});
