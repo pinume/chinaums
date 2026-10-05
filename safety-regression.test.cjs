@@ -102,12 +102,7 @@ async function monthly(mode) {
         assert(savedAttempt, 'attempt must be saved before side effect');
         if (mode === 'stop-submit') throw new Error('STOPPED_BY_USER');
         if (['submit-timeout', 'reconcile-error', 'stop-reconcile'].includes(mode)) throw new Error('timeout');
-        return {status: mode === 'blocked' ? 'blocked' : 'clicked'};
-      }
-      if (operation === 'classifySubmit') {
-        if (mode === 'stop-response') throw new Error('STOPPED_BY_USER');
-        if (mode === 'response-timeout') throw new Error('timeout');
-        return {status: 'accepted', fileName};
+        return mode === 'blocked' ? {status: 'blocked'} : {status: 'accepted', fileName};
       }
       if (operation === 'closeSubmitDialog') return {status: 'closed'};
       throw new Error(operation);
@@ -125,12 +120,12 @@ async function monthly(mode) {
     const results = await result;
     assert.equal(results[0].status, 'SUBMITTED');
     assert.equal(results[0].remoteFileName, fileName);
-    if (['submit-timeout', 'response-timeout'].includes(mode)) {
+    if (mode === 'submit-timeout') {
       assert.equal(results[0].remoteTaskId, '20260930120002681550426941423616');
     }
     assert.equal(submits, 1);
   }
-  assert.equal(reconciles, ['submit-timeout', 'response-timeout', 'reconcile-error', 'stop-reconcile'].includes(mode) ? 1 : 0);
+  assert.equal(reconciles, ['submit-timeout', 'reconcile-error', 'stop-reconcile'].includes(mode) ? 1 : 0);
 }
 
 async function retentionStopsBeforeDownload() {
@@ -147,7 +142,7 @@ async function retentionStopsBeforeDownload() {
 
 (async () => {
   for (const mode of ['accepted', 'multiple', 'merchant-mismatch', 'bad-id', 'old-task', 'no-new', 'read-error', 'duplicate-baseline']) await reconcile(mode);
-  for (const mode of ['normal', 'submit-timeout', 'response-timeout', 'reconcile-error', 'switch', 'missing-merchant', 'blocked', 'stop-query', 'stop-submit', 'stop-response', 'stop-reconcile']) await monthly(mode);
+  for (const mode of ['normal', 'submit-timeout', 'reconcile-error', 'switch', 'missing-merchant', 'blocked', 'stop-query', 'stop-submit', 'stop-reconcile']) await monthly(mode);
   await retentionStopsBeforeDownload();
   for (const names of [[fileName, null], [fileName, fileName]]) {
     let calls = 0;
