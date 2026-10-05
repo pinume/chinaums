@@ -153,7 +153,7 @@ const submit = (adapter) => adapter("submitExport", {
   const exportsBeforeSwitch = exportCalls;
   result = await submit(adapter);
   assert.equal(result.status, "blocked");
-  assert.match(result.reason, /商户、查询条件或数据状态已变化/);
+  assert.match(result.reason, /商户或数据状态已变化/);
   assert.equal(exportCalls, exportsBeforeSwitch, "merchant switch must stop before downDeailBill");
   queryMerchant = merchantNo;
 
