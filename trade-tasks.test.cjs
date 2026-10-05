@@ -99,20 +99,26 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   loading = false; hidden = true; steps.length = 0;
   vm.runInContext(fs.readFileSync(__dirname+'/download-runner.js','utf8'), context);
   ready = true; clicked = 0;
+  const directTaskId = '20260930181340681550426941423616';
   await context.CHINAUMS_DOWNLOAD_RUNNER.run({
     reportType:'trade-audit',merchantNo:args.targetMerchantNo,gate:args.gate,
     startedAt:new Date(2026,8,30,18,13,0).toISOString(),
-    submittedMonths:[{month:'2026-09',remoteFileName:fileName,remoteTaskId:'task-1',submittedAt:new Date(2026,8,30,18,13,0).toISOString()}],
+    submittedMonths:[{month:'2026-09',remoteFileName:fileName,remoteTaskId:directTaskId,submittedAt:new Date(2026,8,30,18,13,0).toISOString()}],
     checkpoint:async()=>{}, sleep:async ms=>{now+=ms;},transition:async()=>{},
     invoke:async(op, params)=>{
-      if(op==='snapshotExportTasks') return {status:'found',rows:[{id:'task-1',fileName,statusCode:'ready',exportStatus:'02',exportStatusDesc:'成功'}]};
-      if(op==='downloadTask') { steps.push('download'); assert(ready); }
+      if(op==='snapshotExportTasks') return {status:'found',rows:[{id:directTaskId,fileName,statusCode:'ready',exportStatus:'02',exportStatusDesc:'成功'}]};
+      if(op==='downloadTaskDirect') {
+        steps.push('direct');
+        assert.equal(params.taskId,directTaskId);
+        assert.equal(params.fileName,fileName);
+        return {status:'download_requested'};
+      }
       if(op==='confirmDownload') { steps.push('complete'); return {status:'download_completed',downloadId:1}; }
-      return adapter(op,params);
+      throw new Error(op);
     }
   });
-  assert.deepEqual(steps,['open','download','complete','close','close']);
-  assert.equal(clicked,1); assert(hidden);
+  assert.deepEqual(steps,['direct','complete']);
+  assert.equal(clicked,0);
   // 真实后台页面：组件已关闭，但离场动画使 DOM 仍有布局且 opacity 为 1。
   hidden = false;
   const component = {$options:{name:'ElDialog'},visible:false,$nextTick:async()=>{}};
