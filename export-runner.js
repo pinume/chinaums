@@ -177,8 +177,8 @@ const transition = async (event) => {
     QUERY_READY: `${month}：查询结果已更新并稳定。`,
     SUBMITTING: `${month}：查询完成，正在申请 XLSX。`,
     WAITING_FOR_SLOT: event.pending === undefined
-      ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒，检查生成状态后重试当前月。`
-      : `${month}：等待申请名额，本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成。`,
+      ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒${reportType === "account-detail" ? "；通过暂存接口检查本轮任务进度后重试" : "，稍后重试当前月"}。`
+      : `${month}：等待申请名额，暂存接口显示本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成；不打开下载暂存列表。`,
     NO_DATA: `${month}：明确返回无数据，跳过空文件。`,
     SUBMITTED: `${month}：申请已被服务器接受。`,
     WAITING_GENERATION: event.listStatus === "api"
@@ -309,7 +309,7 @@ const injectedAdapters = new Set();
 const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => {
   await checkpoint();
   if (operation === "confirmDownload") return waitForDownload(args);
-  const defaultLimit = reportType === "trade-audit" && operation === "setDateRange" ? 60000 : 15000;
+  const defaultLimit = ["account-detail", "trade-audit"].includes(reportType) && ["query", "submitExport"].includes(operation) ? 60000 : 15000;
   const operationDeadline = Math.min(Date.now() + defaultLimit, args.operationDeadline ?? Infinity);
   const checkDeadline = () => {
     if (Date.now() >= operationDeadline) throw new Error(`页面操作“${operation}”已超过截止时间。`);
@@ -366,6 +366,15 @@ const navigateToReport = async () => {
   let inspection;
   while (activeNow() < deadline) {
     inspection = await invoke(reportType, "inspect", {});
+    if (inspection?.downloadListOpen === true) {
+      const closed = await invoke(reportType, "closeDownloadList", {});
+      if (closed?.status !== "closed") {
+        throw new Error("检测到原先打开的下载暂存列表，但无法安全关闭；尚未开始本轮查询。");
+      }
+      appendLog("已关闭原先打开的下载暂存列表，准备继续月度查询。");
+      await sleep(200);
+      continue;
+    }
     if (inspection?.status === "ready" && inspection.hasQuery) return;
     await sleep(400);
   }
@@ -381,67 +390,66 @@ const parsePortalTimestamp = (value) => {
   ).getTime();
 };
 
-const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMerchantNo, gate }) => {
+const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMerchantNo, gate, baselineRows = [] }) => {
   const merchantNo = normalize(targetMerchantNo);
   const attemptedAtMs = new Date(attemptedAt).getTime();
   if (!merchantNo || !Number.isFinite(attemptedAtMs)) return { status: "unknown", reason: "缺少申请时间或已确认商户号，无法安全核对。" };
   const invokeSource = (operation, args = {}) => invoke(reportType, operation, args, sourceTabId);
-  const notice = await invokeSource("classifySubmit");
-  const expectedFileName = notice?.status === "accepted" ? notice.fileName : null;
-  if (["accepted", "throttled", "failed"].includes(notice?.status)) {
-    const closed = await invokeSource("closeSubmitDialog");
-    if (closed?.status !== "closed") return { status: "unknown", reason: "提交提示未能安全关闭，无法核对。" };
-  }
-  const opened = await invokeSource("openDownloadList", { gate, targetMerchantNo: merchantNo });
-  if (!["clicked", "already_open"].includes(opened?.status)) return { status: "unknown", reason: "无法打开暂存列表核对未知申请。" };
-  const deadline = activeNow() + 10000;
-  const matches = new Map();
-  let complete = false;
-  let duplicateCandidate = false;
-  let list;
-  const readPage = async (page) => {
+
+  if (["account-detail", "trade-audit"].includes(reportType)) {
+    const previousIds = new Set((Array.isArray(baselineRows) ? baselineRows : [])
+      .map((row) => String(row?.id || "")).filter(Boolean));
+    if (previousIds.size !== baselineRows.length) {
+      return { status: "unknown", reason: "申请前暂存任务基线缺失或身份重复，不能安全核对。" };
+    }
+    const deadline = activeNow() + 15000;
     while (activeNow() < deadline) {
       await checkpoint();
-      list = await invokeSource("parseDownloadTasks");
-      if (["found", "empty"].includes(list?.status) && (page === null || Number(list.page) === page)) return true;
-      if (list?.status === "parse_error") return false;
-      await sleep(200);
-    }
-    return false;
-  };
-  if (await readPage(null)) {
-    if (Number(list.page) !== 1) {
-      const selected = await invokeSource("selectDownloadPage", { page: 1 });
-      if (!["clicked", "already_current"].includes(selected?.status) || !await readPage(1)) list = null;
-    }
-    while (list && activeNow() < deadline) {
-      for (const row of list.rows || []) {
-        const generatedAt = globalThis.CHINAUMS_DOWNLOAD_RUNNER.timestampFromFileName(row.fileName, reportType, merchantNo);
-        const createdAt = parsePortalTimestamp(row.createdAt);
-        const identityMatched = Boolean(expectedFileName && row.fileName === expectedFileName);
-        if (generatedAt === null || !Number.isFinite(createdAt) ||
-          (!identityMatched && (generatedAt < attemptedAtMs - 2000 || createdAt < attemptedAtMs - 2000 ||
-            generatedAt > Date.now() + 2000 || createdAt > Date.now() + 2000)) ||
-          Object.values(state?.months || {}).some((month) => month.remoteFileName === row.fileName)) continue;
-        if (!expectedFileName || identityMatched) {
-          if (matches.has(row.fileName)) duplicateCandidate = true;
-          matches.set(row.fileName, row);
-        }
+      let snapshot;
+      try {
+        snapshot = await invokeSource("snapshotExportTasks", {
+          operationDeadline: Date.now() + Math.max(0, deadline - activeNow())
+        });
+      } catch (error) {
+        if (error?.message === "STOPPED_BY_USER") throw error;
+        snapshot = { status: "unknown", reason: error?.message || "暂存接口读取失败" };
       }
-      if (matches.size > 1) break;
-      if (list.hasNext === false) { complete = true; break; }
-      const page = Number(list.page);
-      if (!Number.isInteger(page) || page < 1 || list.hasNext !== true) break;
-      const next = await invokeSource("nextDownloadPage");
-      if (next?.status !== "clicked" || !await readPage(page + 1)) break;
+      if (snapshot?.status === "found" && Array.isArray(snapshot.rows)) {
+        const added = snapshot.rows.filter((row) => !previousIds.has(String(row.id || "")));
+        if (added.length > 1) {
+          return { status: "unknown", reason: "提交后出现多个新暂存任务，无法唯一证明本次申请归属；不自动重提。" };
+        }
+        if (added.length === 1) {
+          const row = added[0];
+          const createdAtMs = parsePortalTimestamp(row.createdAt);
+          const accountMatch = String(row.fileName || "").match(/^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
+          const tradeMatch = String(row.fileName || "").match(/^MER_([A-Z0-9]+)_\d{14}_yjhx\.xlsx$/i);
+          const fileMatch = reportType === "trade-audit" ? tradeMatch : accountMatch;
+          const idValid = reportType === "trade-audit"
+            ? /^\d{32}$/.test(String(row.id || ""))
+            : /^[0-9a-f]{32}$/i.test(String(row.id || ""));
+          const alreadyBound = Object.values(state?.months || {}).some((month) =>
+            month.remoteTaskId === row.id || month.remoteFileName === row.fileName
+          );
+          if (!idValid || !fileMatch || normalize(fileMatch[1]) !== merchantNo || !Number.isFinite(createdAtMs) ||
+            createdAtMs < attemptedAtMs - 2000 || createdAtMs > Date.now() + 2000 || alreadyBound) {
+            return { status: "unknown", reason: "唯一新增暂存任务的商户、时间或身份校验未通过；不自动重提。" };
+          }
+          return {
+            status: "accepted",
+            taskId: String(row.id),
+            fileName: row.fileName,
+            createdAt: row.createdAt,
+            merchantNo
+          };
+        }
+      } else if (snapshot?.status && !["unknown", "loading", "empty"].includes(snapshot.status)) {
+        return { status: "unknown", reason: snapshot.reason || snapshot.status };
+      }
+      await sleep(Math.max(0, Math.min(500, deadline - activeNow())));
     }
+    return { status: "unknown", reason: "15秒内未找到唯一新增暂存任务；不自动重提。" };
   }
-  const closed = await invokeSource("closeDownloadList");
-  if (!["closed", "already_closed"].includes(closed?.status)) return { status: "unknown", reason: "暂存列表未能安全关闭。" };
-  if (!complete || matches.size !== 1 || duplicateCandidate) return { status: "unknown", reason: "分页扫描不完整或未找到唯一候选；不自动重提。" };
-  if (!expectedFileName) return { status: "unknown", reason: "仅有时间窗口内的新任务，缺少本次申请返回的远端身份；不能证明归属，不自动重提。" };
-  const row = [...matches.values()][0];
-  return { status: "accepted", createdAt: row.createdAt, fileName: row.fileName, merchantNo };
 };
 
 const closeExistingSubmitNotice = async () => {
@@ -510,7 +518,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-05-trade-api-generation。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-05-account-query-api。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
@@ -532,11 +540,6 @@ const run = async () => {
 
   await navigateToReport();
   if (await closeExistingSubmitNotice()) appendLog("已关闭上次遗留的申请提示，开始本轮月份查询。");
-  const preexistingList = await invoke(reportType, "closeDownloadList", {});
-  if (!new Set(["closed", "already_closed"]).has(preexistingList?.status)) {
-    throw new Error("当前下载暂存列表状态无法自动关闭；尚未开始本轮查询。");
-  }
-  if (preexistingList.status === "closed") appendLog("已关闭原先打开的下载暂存列表，准备继续月度查询。");
   if (months.length) {
     await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
       months,
@@ -587,7 +590,7 @@ const run = async () => {
   state.status = "COMPLETED";
   state.stage = submittedMonths.length ? "本轮文件已完成下载" : "本轮没有需要下载的文件";
   appendLog(submittedMonths.length
-    ? "导出流程结束。Chrome 已确认本轮所有文件下载完成，并关闭暂存列表。"
+    ? `导出流程结束。Chrome 已确认本轮所有文件下载完成；${reportType === "trade-audit" ? "以旧换新" : "对账明细"}最终下载未打开下载暂存列表。`
     : "导出流程结束。本轮月份均无数据，没有提交导出申请。");
   renderState();
   await saveState();

@@ -31,38 +31,43 @@ async function check(trade, stuck) {
         if(args.operationDeadline)assert(args.operationDeadline>wall,'adapter receives a wall-clock deadline even after pauses');
         return {status:'found',rows:tasks};
       }
-      if(op==='submitExport'){submitted++;return {status:'clicked'};}
-      if(op==='classifySubmit'){tasks=[{id:'1',fileName:file}];return {status:'accepted'};}
+      if(op==='submitExport'){
+        submitted++;
+        tasks=[{id:'1',fileName:file}];
+        return {status:'accepted'};
+      }
       if(op==='closeSubmitDialog')return {status:'closed'};
       throw Error(op);
     }});
   assert.equal(submitted,1);
-  let closed = false, closing = false, reads = 0, downloads = 0;
+  let downloads = 0, downloadPaused = false;
+  const calls = [];
   const promise = c.CHINAUMS_DOWNLOAD_RUNNER.run({reportType:trade?'trade-audit':'account-detail',merchantNo:'MERCHANT1',
     gate:{allowed:true,merchantNo:'MERCHANT1'},startedAt:new Clock().toISOString(),
-    submittedMonths:[{month:'2026-01',remoteFileName:file,remoteTaskId:trade?'task-1':null,submittedAt:new Clock().toISOString()}],now:c.now,
-    sleep:async ms=>{wall+=ms;},checkpoint:async()=>{if(closing&&reads===0)pause();},transition:async()=>{},
-    invoke:async op=>{
+    submittedMonths:[{month:'2026-01',remoteFileName:file,remoteTaskId:'task-1',submittedAt:new Clock().toISOString()}],now:c.now,
+    sleep:async ms=>{wall+=ms;},checkpoint:async()=>{if(!downloadPaused){downloadPaused=true;pause();}},transition:async()=>{},
+    invoke:async (op,args)=>{
+      calls.push(op);
       if(op==='snapshotExportTasks'){
-        if(!trade)throw Error('account detail must not poll trade snapshot');
-        return {status:'found',rows:[{id:'task-1',fileName:file,statusCode:'ready',exportStatus:'02',exportStatusDesc:'成功'}]};
+        return {status:'found',rows:[{id:'task-1',fileName:file,statusCode:'ready',
+          ...(trade?{exportStatus:'02',exportStatusDesc:'成功'}:{taskStatus:'30'})}]};
       }
-      if(op==='openDownloadList')return {status:'clicked'};
-      if(op==='setDownloadPageSize')return {status:'unchanged'};
-      if(op==='parseDownloadTasks'){
-        if(closing&&++reads===2&&!stuck)closed=true;
-        return closed?{status:'not_open'}:{status:'found',page:1,total:1,hasNext:false,rows:[{fileName:file,createdAt:'2026-10-03 00:00:01',statusCode:'ready',downloadEnabled:true}]};
+      if(op==='downloadTaskDirect'){
+        assert.equal(args.fileName,file);
+        downloads++;
+        return {status:'download_requested'};
       }
-      if(op==='downloadTask'){downloads++;return {status:'download_requested'};}
-      if(op==='confirmDownload')return {status:'download_completed',downloadId:1};
-      if(op==='closeDownloadList'){closing=true;return {status:'closed'};}
+      if(op==='confirmDownload')return stuck?{status:'download_unknown'}:{status:'download_completed',downloadId:1};
       throw Error(op);
     }});
-  if(stuck)await assert.rejects(promise,/关闭结果无法确认/);
-  else {await promise;assert(closed,'final close must be observed before success');}
+  if(stuck)await assert.rejects(promise,/下载完成状态无法确认/);
+  else await promise;
+  for(const operation of ['openDownloadList','parseDownloadTasks','downloadTask','closeDownloadList']) {
+    assert(!calls.includes(operation), 'direct download must not use list UI');
+  }
   assert.equal(downloads,1);
 }
 (async()=>{
   for(const trade of [false,true])for(const stuck of [false,true])await check(trade,stuck);
-  console.log('PASS: five-minute pauses preserve monthly deadlines; snapshot deadlines stay on wall clock; final delayed/stuck list closes are verified for both reports');
+  console.log('PASS: pauses preserve deadlines; both reports download directly and stop when Chrome completion is unknown');
 })().catch(e=>{console.error(e);process.exitCode=1;});

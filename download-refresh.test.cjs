@@ -23,15 +23,8 @@ const apiRow = (index, statusCode, extra = {}) => ({
   errorMsg: null,
   ...extra
 });
-const uiRow = index => ({
-  fileName: names[index],
-  createdAt: `2026-10-05 12:00:0${index + 1}`,
-  statusCode: 'ready',
-  downloadEnabled: true
-});
-
 async function run(mode = 'success') {
-  let snapshotCalls = 0, opens = 0, closes = 0, opened = false;
+  let snapshotCalls = 0;
   const clicks = [], events = [];
   const result = CHINAUMS_DOWNLOAD_RUNNER.run({
     reportType: 'trade-audit',
@@ -57,29 +50,15 @@ async function run(mode = 'success') {
         if (snapshotCalls === 2) return {status:'found', rows:[apiRow(0, 'ready'), apiRow(1, 'ready'), apiRow(2, 'pending', {exportStatus:'99', exportStatusDesc:'未知'})]};
         return {status:'found', rows:[apiRow(0, 'ready'), apiRow(1, 'ready'), apiRow(2, 'ready')]};
       }
-      if (op === 'openDownloadList') {
+      if (op === 'downloadTaskDirect') {
         assert.equal(mode, 'success');
-        assert.equal(snapshotCalls, 3, 'must not open the download list before every API task is ready');
-        opens++;
-        opened = true;
-        return {status:'clicked'};
-      }
-      if (op === 'parseDownloadTasks') {
-        if (!opened) return {status:'not_open'};
-        return {status:'found', page:1, total:3, hasNext:false, rows:[0,1,2].map(uiRow)};
-      }
-      if (op === 'downloadTask') {
-        assert.equal(opened, true);
+        assert.equal(snapshotCalls, 3, 'must not download before every API task is ready');
         assert(!clicks.includes(args.fileName));
+        assert.equal(args.taskId, ids[clicks.length]);
         clicks.push(args.fileName);
         return {status:'download_requested'};
       }
       if (op === 'confirmDownload') return {status:'download_completed', downloadId:clicks.length};
-      if (op === 'closeDownloadList') {
-        closes++;
-        opened = false;
-        return {status:'closed'};
-      }
       throw new Error(op);
     }
   });
@@ -87,24 +66,22 @@ async function run(mode = 'success') {
   if (mode === 'api-error') {
     await assert.rejects(result, /暂存接口连续 3 次读取失败/);
     assert.equal(snapshotCalls, 3);
-    assert.equal(opens, 0);
+    assert.equal(clicks.length, 0);
     return;
   }
   if (mode === 'failed') {
     await assert.rejects(result, /生成失败/);
-    assert.equal(opens, 0);
+    assert.equal(clicks.length, 0);
     return;
   }
   if (mode === 'mismatch') {
     await assert.rejects(result, /非本轮任务 ID|文件名与本轮记录不一致/);
-    assert.equal(opens, 0);
+    assert.equal(clicks.length, 0);
     return;
   }
 
   const rows = await result;
   assert.equal(snapshotCalls, 3);
-  assert.equal(opens, 1, 'trade download list opens exactly once after API readiness');
-  assert.equal(closes, 1);
   assert.deepEqual(clicks, names);
   assert.equal(rows.length, 3);
   const waiting = events.filter(event => event.status === 'WAITING_GENERATION');
@@ -116,6 +93,6 @@ async function run(mode = 'success') {
   await run('api-error');
   await run('failed');
   await run('mismatch');
-  console.log('PASS: trade generation polls exact task IDs, tolerates unknown states, opens the list once, and stops on API or identity failures');
+  console.log('PASS: trade generation polls exact task IDs, tolerates unknown states, then downloads directly and stops on API or identity failures');
 })().catch(error => { console.error(error); process.exitCode = 1; })
   .finally(() => { Date.now = originalNow; });

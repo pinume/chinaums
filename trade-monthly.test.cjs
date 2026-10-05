@@ -22,15 +22,18 @@ async function run() {
       calls.push(operation);
       if(operation==='setDateRange')return{status:'set'};
       if(operation==='snapshotExportTasks')return{status:'found',rows:[...tasks]};
-      if(operation==='submitExport'){ submitted++;tasks.push({id:String(submitted),fileName:`89813014812B1L3_MX_2026093012000${submitted}.xlsx`});return{status:'clicked'};}
+      if(operation==='submitExport'){
+        submitted++;
+        tasks.push({id:String(submitted),fileName:`89813014812B1L3_MX_2026093012000${submitted}.xlsx`});
+        return{status:'accepted'};
+      }
       if(operation==='query')return{status:'clicked'};
       if(operation==='queryState')return{status:'ready',count:132,merchantNo:'89813014812B1L3'};
-      if(operation==='classifySubmit')return{status:'accepted'};
       if(operation==='closeSubmitDialog')return{status:'closed'};
       throw new Error(operation);
     }
   });
-  assert.deepEqual(calls, Array(2).fill(['setDateRange','query','queryState','snapshotExportTasks','submitExport','classifySubmit','closeSubmitDialog','snapshotExportTasks']).flat());
+  assert.deepEqual(calls, Array(2).fill(['setDateRange','query','queryState','snapshotExportTasks','submitExport','closeSubmitDialog','snapshotExportTasks']).flat());
   const emptyEvents = [];
   await context.CHINAUMS_MONTHLY_RUNNER.run({
     months, gate: {},
@@ -50,8 +53,7 @@ async function run() {
       if (operation === 'setDateRange') return {status:'set'};
       if (operation === 'query') return {status:'clicked'};
       if (operation === 'queryState') return {status:'ready',count:1,merchantNo:'89813015722APT1',merchantId:'merchant-id'};
-      if (operation === 'submitExport') { submits++; return {status:'clicked'}; }
-      if (operation === 'classifySubmit') return {status:'accepted'};
+      if (operation === 'submitExport') { submits++; return {status:'accepted'}; }
       if (operation === 'closeSubmitDialog') {
         if (closeFails === 'timeout') throw new Error('页面操作“closeSubmitDialog”在15秒内没有响应。');
         if (closeFails === 'stopped') throw new Error('STOPPED_BY_USER');

@@ -1,171 +1,183 @@
 const assert = require("node:assert/strict");
 require("./download-runner.js");
-const originalDateNow = Date.now;
 
-async function check(failure) {
+const originalDateNow = Date.now;
+const merchantNo = "89813014812B06R";
+const fileName = `${merchantNo}_MX_20260930120001.xlsx`;
+
+async function checkAccount(mode = "success") {
   let now = new Date(2026, 8, 30, 12, 0, 2).getTime();
-  const startedWaitingAt = now;
+  const generationStartedAt = now;
   Date.now = () => now;
-  let opened = false;
-  let opens = 0;
-  let downloads = 0;
-  let closing = false;
-  let closeReads = 0;
-  let closeAttempts = 0;
-  let openingReads = 0;
-  const calls = [];
-  const trade = failure === "retry-close";
-  const fileName = trade ? "MER_89813014812B06R_20260930120001_yjhx.xlsx" : "89813014812B06R_MX_20260930120001.xlsx";
-  const secondFile = "89813014812B06R_MX_20260930120002.xlsx";
-  const progressive = ["progressive", "disabled", "resume"].includes(failure);
-  const fallbackAmbiguous = failure === "fallback-ambiguous";
-  const clickedFiles = [];
-  let awaitingCompletion = false;
-  let waitingForGeneration = false;
+  let snapshotCalls = 0;
+  let directRequests = 0;
+  let confirmations = 0;
   let waitedMs = 0;
-  const generationEvents = [];
+  let waitingForGeneration = false;
+  const events = [];
+  const calls = [];
+
   const result = globalThis.CHINAUMS_DOWNLOAD_RUNNER.run({
-    reportType: trade ? "trade-audit" : "account-detail",
-    merchantNo: "89813014812B06R",
+    reportType: "account-detail",
+    merchantNo,
     startedAt: new Date(2026, 8, 30, 12, 0, 0).toISOString(),
-    submittedMonths: [
-      ...(progressive ? [{ month: "2026-08", submittedAt: "2026-09-30T03:59:00.000Z",
-        remoteFileName: fileName, downloadedFileName: failure === "resume" ? fileName : null }] : []),
-      { month: "2026-09", remoteFileName: ["fallback", "fallback-ambiguous"].includes(failure) ? null : progressive ? secondFile : fileName,
-        remoteTaskId: trade ? "task-1" : null,
-        submittedAt: ["fallback", "fallback-ambiguous"].includes(failure)
-          ? new Date(new Date(2026, 8, 30, 12, 0, 1).getTime()).toISOString() : "2026-09-30T04:00:00.000Z" }
-    ],
-    gate: { allowed: true, merchantNo: "89813014812B06R" },
+    submittedMonths: [{
+      month: "2026-09",
+      remoteFileName: fileName,
+      remoteTaskId: mode === "missing-id" ? null : "task-1",
+      downloadedFileName: mode === "resume" ? fileName : null,
+      submittedAt: "2026-09-30T04:00:00.000Z"
+    }],
+    gate: { allowed: true, merchantNo },
     checkpoint: async () => {
-      if (failure === "stop-wait" && waitingForGeneration && waitedMs >= 1000) throw new Error("STOPPED_BY_USER");
+      if (mode === "stop-wait" && waitingForGeneration && waitedMs >= 1000) {
+        throw new Error("STOPPED_BY_USER");
+      }
     },
-    sleep: async (milliseconds) => { now += milliseconds; if (waitingForGeneration) waitedMs += milliseconds; },
+    sleep: async (milliseconds) => {
+      now += milliseconds;
+      if (waitingForGeneration) waitedMs += milliseconds;
+    },
     transition: async (event) => {
-      if (event.status === "WAITING_GENERATION") {
-        generationEvents.push(event);
-        if (failure === "progressive") assert.equal(event.ready, 0, "completed files must not count as ready to download");
-        waitingForGeneration = true;
-        assert.equal(event.remaining, (progressive ? 2 : 1) - downloads - (failure === "resume" ? 1 : 0));
-        assert(event.waitedMs >= 0);
-      }
+      events.push(event);
+      if (event.status === "WAITING_GENERATION") waitingForGeneration = true;
     },
-    invoke: async (operation, args) => {
+    invoke: async (operation, args = {}) => {
       calls.push(operation);
-      switch (operation) {
-        case "query":
-        case "queryState": throw new Error("Refreshing the download list must not rerun the transaction query");
-        case "snapshotExportTasks":
-          if (!trade) throw new Error("account detail must not poll trade task API");
-          assert.deepEqual(args.taskIds, ["task-1"]);
-          return { status: "found", rows: [{ id: "task-1", fileName, statusCode: "ready", exportStatus: "02", exportStatusDesc: "成功" }] };
-        case "setDownloadPageSize": return { status: "unchanged" };
-        case "openDownloadList":
-          opens += 1;
-          if (failure === "reopen" && opens >= 2) return { status: "controls_missing" };
-          openingReads = failure === "delayed-open" ? 3 : 0;
-          opened = true;
-          return { status: "clicked" };
-        case "closeDownloadList":
-          assert.equal(openingReads, 0, "must wait for the list to open before closing it");
-          if (failure === "close") return { status: "blocked" };
-          if (failure === "already-closed") { opened = false; return { status: "already_closed" }; }
-          closeAttempts += 1;
-          if (failure === "retry-close" && closeAttempts >= 4) { opened = false; closing = false; return { status: "already_closed" }; }
-          closing = true;
-          closeReads = 0;
-          return { status: "closed" };
-        case "parseDownloadTasks":
-          if (failure === "never-open") return { status: "not_open" };
-          if (openingReads > 0) { openingReads -= 1; return { status: "not_open" }; }
-          // 模拟关闭动画；只有重新打开列表才取得服务端最新状态。
-          if (closing && failure === "slow-close") now += 6000;
-          if (closing && !["stuck", "retry-close"].includes(failure) && ++closeReads >= (failure === "slow-close" ? 1 : 2)) { opened = false; closing = false; }
-          if (!opened) return { status: "not_found" };
-          const generated = trade ? true : failure === "long-generation" ? now - startedWaitingAt >= 180000 : opens >= 2;
-          return {
-            status: "found", page: 1, total: progressive ? 2 : 1, hasNext: false,
-            rows: [{ fileName, createdAt: "2026-09-30 12:00:01",
-              statusCode: progressive || generated ? "ready" : "pending",
-              downloadEnabled: failure === "progressive" || generated },
-            ...((progressive || fallbackAmbiguous) ? [{ fileName: secondFile, createdAt: "2026-09-30 12:00:02",
-              statusCode: opens >= 2 ? "ready" : "pending", downloadEnabled: opens >= 2 }] : [])]
-          };
-        case "downloadTask":
-          assert.equal(awaitingCompletion, false, "must confirm the previous download before clicking again");
-          awaitingCompletion = true;
-          if (failure === "long-generation") assert(now - startedWaitingAt >= 180000);
-          else assert.equal(opens, trade ? 1 : failure === "progressive" && args.fileName === fileName ? 1 : 2);
-          assert.equal(closing, false);
-          assert(!clickedFiles.includes(args.fileName), "must not click a file twice");
-          clickedFiles.push(args.fileName);
-          downloads += 1;
-          return { status: "download_requested" };
-        case "confirmDownload":
-          assert.equal(awaitingCompletion, true);
-          awaitingCompletion = false;
-          return { status: "download_completed", downloadId: downloads };
-        default: throw new Error(`Unexpected operation: ${operation}`);
+      if (operation === "snapshotExportTasks") {
+        snapshotCalls += 1;
+        assert.deepEqual(args.taskIds, ["task-1"]);
+        if (mode === "api-error") return { status: "error", reason: "temporary failure" };
+        if (mode === "mismatch") {
+          return { status: "found", rows: [{ id: "task-1", fileName: `${merchantNo}_MX_20260930120002.xlsx`, taskStatus: "30", statusCode: "ready" }] };
+        }
+        const pending = mode === "stop-wait" ||
+          (mode === "api-wait" && snapshotCalls < 3) ||
+          (mode === "long-generation" && now - generationStartedAt < 180000);
+        return {
+          status: "found",
+          rows: [{ id: "task-1", fileName, taskStatus: pending ? "10" : "30", statusCode: pending ? "pending" : "ready" }]
+        };
       }
+      if (operation === "downloadTaskDirect") {
+        directRequests += 1;
+        assert.equal(args.taskId, "task-1");
+        assert.equal(args.fileName, fileName);
+        assert.equal(args.targetMerchantNo, merchantNo);
+        assert.equal(args.gate.allowed, true);
+        if (mode === "direct-blocked") return { status: "blocked", reason: "guard" };
+        return { status: "download_requested" };
+      }
+      if (operation === "confirmDownload") {
+        confirmations += 1;
+        assert.equal(args.fileName, fileName);
+        if (mode === "confirm-fail") return { status: "download_unknown" };
+        return { status: "download_completed", downloadId: 7 };
+      }
+      throw new Error(`Unexpected operation: ${operation}`);
     }
   });
-  if (failure === "stop-wait") {
-    await assert.rejects(result, /STOPPED_BY_USER/);
-    assert.equal(waitedMs, 1000);
-    assert.equal(downloads, 0);
-    assert.equal(opens, 1);
-    return;
-  }
-  if (["fallback", "fallback-ambiguous"].includes(failure)) {
-    await assert.rejects(result, /缺少本月已确认的远端文件名/);
+
+  if (mode === "missing-id") {
+    await assert.rejects(result, /缺少本轮已确认的暂存任务 ID/);
     assert.equal(calls.length, 0);
     return;
   }
-  if (failure && (!progressive || fallbackAmbiguous) && !["retry-close", "fallback", "delayed-open", "already-closed", "slow-close", "long-generation"].includes(failure)) {
-    await assert.rejects(result, fallbackAmbiguous ? /多个候选/ : failure === "close" ? /无法关闭暂存列表/
-      : failure === "stuck" ? /关闭结果无法确认/
-      : failure === "never-open" ? /暂存列表打开后未能读取/ : /无法重新打开暂存列表/);
-    assert.equal(downloads, 0);
-    if (failure === "never-open") assert(!calls.includes("closeDownloadList"));
-  } else {
-    assert.equal((await result)[0].fileName, fileName);
-    assert.equal(downloads, progressive && failure !== "resume" ? 2 : 1);
-    if (failure === "long-generation") assert(generationEvents.some(event => event.waitedMs >= 120000));
-    if (progressive) assert.deepEqual(clickedFiles, failure === "resume" ? [secondFile] : [fileName, secondFile]);
-    if (failure === "progressive") assert(calls.indexOf("downloadTask") < calls.indexOf("closeDownloadList"));
-    const closeIndex = calls.indexOf("closeDownloadList");
-    if (failure === "retry-close") {
-      assert.deepEqual(calls.slice(closeIndex), ["closeDownloadList", "parseDownloadTasks",
-        "closeDownloadList", "parseDownloadTasks", "closeDownloadList", "parseDownloadTasks",
-        "closeDownloadList"]);
-      assert.equal(opens, 1, "trade download list must not reopen after API readiness");
-    } else {
-      const expected = ["closeDownloadList",
-        ...(failure === "already-closed" ? [] : failure === "slow-close" ? ["parseDownloadTasks"] : ["parseDownloadTasks", "parseDownloadTasks"]),
-        "openDownloadList"];
-      assert.deepEqual(calls.slice(closeIndex, closeIndex + expected.length), expected);
-    }
+  if (mode === "api-error") {
+    await assert.rejects(result, /对账明细暂存接口连续 3 次读取失败/);
+    assert.equal(snapshotCalls, 3);
+    assert.equal(directRequests, 0);
+    return;
+  }
+  if (mode === "mismatch") {
+    await assert.rejects(result, /文件名与本轮记录不一致/);
+    assert.equal(directRequests, 0);
+    return;
+  }
+  if (mode === "stop-wait") {
+    await assert.rejects(result, /STOPPED_BY_USER/);
+    assert.equal(waitedMs, 1000);
+    assert.equal(directRequests, 0);
+    return;
+  }
+  if (mode === "direct-blocked") {
+    await assert.rejects(result, /未通过直接下载门禁/);
+    assert.equal(directRequests, 1);
+    assert.equal(confirmations, 0);
+    return;
+  }
+  if (mode === "confirm-fail") {
+    await assert.rejects(result, /下载完成状态无法确认/);
+    assert.equal(directRequests, 1);
+    assert.equal(confirmations, 1);
+    return;
+  }
+
+  const rows = await result;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].fileName, fileName);
+  assert.equal(rows[0].id, "task-1");
+  assert.equal(directRequests, mode === "resume" ? 0 : 1);
+  assert.equal(confirmations, mode === "resume" ? 0 : 1);
+  assert(!calls.includes("openDownloadList"));
+  assert(!calls.includes("parseDownloadTasks"));
+  assert(!calls.includes("closeDownloadList"));
+  if (mode === "api-wait") {
+    assert.equal(snapshotCalls, 3);
+    assert.deepEqual(events.filter((event) => event.status === "WAITING_GENERATION")
+      .map((event) => [event.found, event.ready, event.remaining]), [[1, 0, 1], [1, 0, 1]]);
+  }
+  if (mode === "long-generation") {
+    assert(now - generationStartedAt >= 180000);
+    assert(events.some((event) => event.status === "WAITING_GENERATION" && event.waitedMs >= 120000));
   }
 }
 
+async function checkTradeDirect() {
+  let now = new Date(2026, 8, 30, 12, 0, 2).getTime();
+  Date.now = () => now;
+  const tradeFile = `MER_${merchantNo}_20260930120001_yjhx.xlsx`;
+  const taskId = "20260930120001681550426941423616";
+  const calls = [];
+  await globalThis.CHINAUMS_DOWNLOAD_RUNNER.run({
+    reportType: "trade-audit",
+    merchantNo,
+    startedAt: new Date(2026, 8, 30, 12, 0, 0).toISOString(),
+    submittedMonths: [{ month: "2026-09", remoteFileName: tradeFile, remoteTaskId: taskId, submittedAt: "2026-09-30T04:00:00.000Z" }],
+    gate: { allowed: true, merchantNo },
+    checkpoint: async () => {},
+    sleep: async (milliseconds) => { now += milliseconds; },
+    transition: async () => {},
+    invoke: async (operation, args = {}) => {
+      calls.push(operation);
+      if (operation === "snapshotExportTasks") {
+        return { status: "found", rows: [{ id: taskId, fileName: tradeFile, statusCode: "ready", exportStatus: "02", exportStatusDesc: "成功" }] };
+      }
+      if (operation === "downloadTaskDirect") {
+        assert.equal(args.taskId, taskId);
+        assert.equal(args.fileName, tradeFile);
+        return { status: "download_requested" };
+      }
+      if (operation === "confirmDownload") return { status: "download_completed", downloadId: 1 };
+      throw new Error(operation);
+    }
+  });
+  assert.deepEqual(calls, ["snapshotExportTasks", "downloadTaskDirect", "confirmDownload"]);
+}
+
 (async () => {
-  await check();
-  await check("close");
-  await check("reopen");
-  await check("stuck");
-  await check("progressive");
-  await check("disabled");
-  await check("resume");
-  await check("retry-close");
-  await check("already-closed");
-  await check("slow-close");
-  await check("delayed-open");
-  await check("never-open");
-  await check("stop-wait");
-  await check("long-generation");
-  await check("fallback");
-  await check("fallback-ambiguous");
-  console.log("PASS: ready files download first without duplicates; disabled controls, ambiguous time fallback and refresh failures stay guarded");
+  for (const mode of ["success", "resume", "api-wait", "api-error", "mismatch", "direct-blocked",
+    "confirm-fail", "stop-wait", "long-generation", "missing-id"]) {
+    await checkAccount(mode);
+  }
+  let calls = 0;
+  await assert.rejects(globalThis.CHINAUMS_DOWNLOAD_RUNNER.run({
+    submittedMonths: [{ remoteFileName: fileName }, { remoteFileName: fileName }],
+    startedAt: new Date().toISOString(),
+    invoke: async () => { calls += 1; }
+  }), /同一远端文件名/);
+  assert.equal(calls, 0);
+  await checkTradeDirect();
+  console.log("PASS: both reports use exact API task identity, direct task downloads, and Chrome completion confirmation");
 })().catch((error) => { console.error(error); process.exitCode = 1; })
   .finally(() => { Date.now = originalDateNow; });
-

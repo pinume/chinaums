@@ -17,8 +17,11 @@ async function check(stuck){
       if(op==='query')return {status:'clicked'};
       if(op==='queryState')return {status:'ready',count:1,merchantNo:'MERCHANT1',merchantId:'internal-id'};
       if(op==='snapshotExportTasks')return {status:'found',rows:[...tasks]};
-      if(op==='submitExport'){submits++;return {status:'clicked'};}
-      if(op==='classifySubmit'){tasks.push({id:String(submits),fileName:`MER_MERCHANT1_2026100300000${submits}_yjhx.xlsx`});return {status:'accepted'};}
+      if(op==='submitExport'){
+        submits++;
+        tasks.push({id:String(submits),fileName:`MER_MERCHANT1_2026100300000${submits}_yjhx.xlsx`});
+        return {status:'accepted'};
+      }
       if(op==='closeSubmitDialog'){closedAt=now;return {status:'closed'};}
       throw Error(op);
     }});

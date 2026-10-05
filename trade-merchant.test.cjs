@@ -1,69 +1,158 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-let now = 1000;
-let merchantValues = ['89813014812B1L3'];
-let rowSignature = 'before';
-let exportClicks = 0;
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+
 class Element {
-  constructor(text = '', children = []) { this.text = text; this.children = children; this.classList = {contains: () => false}; }
-  get textContent() { return typeof this.text === 'function' ? this.text() : this.text; }
-  get innerText() { return this.textContent; }
   getClientRects() { return [1]; }
-  querySelectorAll(selector) {
-    if (selector === '.cell') return [this];
-    if (selector === '.el-table__header-wrapper thead th') return [new Element('交易金额')];
-    if (selector === '.el-table__body-wrapper tbody > tr') return merchantValues.map(value => new Element(() => `${rowSignature} ${value}`, [new Element(value)]));
-    return [];
-  }
-  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   closest() { return null; }
+  querySelectorAll() { return []; }
+  querySelector() { return null; }
 }
-const input = new Element(); input.value = '2026/09/01 ~ 2026/09/30';
-const query = new Element('查询'); query.click = () => { rowSignature = `after-${now}`; };
-const exportButton = new Element('批量导出'); exportButton.click = () => exportClicks++;
-const listButton = new Element('下载暂存列表');
+
+let token = "TEST_TOKEN";
+let queryMerchantId = "merchant-id";
+let queryCalls = 0;
+let applyCalls = 0;
+let responseData = { success: true, code: "000000", message: "成功", data: null };
+let lastApply = null;
 const table = new Element();
-table.querySelectorAll = selector => selector === '.el-table__header-wrapper thead th' ? [new Element('交易金额')]
-  : selector === '.el-table__body-wrapper tbody > tr' ? merchantValues.map(value => new Element(() => `${rowSignature} ${value}`, [new Element(value)])) : [];
-table.closest = () => null;
-table.__vue__ = {$parent: {$options:{name:'table'}, get tableData(){return merchantValues.map(mchntId=>({mchntId}));}}};
+const component = {
+  $options: { name: "table" },
+  $axiosApi: {
+    axiosPromisePara: async (payload, endpoint, options) => {
+      if (endpoint.endsWith("/queryList")) {
+        queryCalls += 1;
+        return {
+          success: true,
+          code: "000000",
+          message: "成功",
+          data: {
+            size: 10,
+            current: payload.current,
+            total: 1,
+            pages: 1,
+            list: [{ id: `row-${queryCalls}`, mchntId: queryMerchantId, transDate: "20260915" }]
+          }
+        };
+      }
+      if (endpoint.endsWith("/applyExport")) {
+        applyCalls += 1;
+        lastApply = { payload: JSON.parse(JSON.stringify(payload)), options };
+        return responseData;
+      }
+      throw new Error(endpoint);
+    }
+  }
+};
+table.__vue__ = { $parent: component };
+
 const context = vm.createContext({
-  Date: class extends Date { static now() { return now; } },
-  location: {hostname:'service.chinaums.com',pathname:'/uisportalfront/',hash:'#/auditOfTrade2026'},
-  Element, getComputedStyle: () => ({display:'block',visibility:'visible',opacity:'1'}),
-  document: {body:new Element('根据查询条件共查询到 1 条记录'),
-    querySelectorAll: selector => {
-      if (selector === 'input.deal-date') return [input];
-      if (selector === 'button') return [query, exportButton, listButton];
-      if (selector === '.el-loading-mask,.layui-layer-loading,.loading') return [];
-      if (selector === '.el-table') return [table];
-      if (selector === '.el-table__body-wrapper tbody > tr') return table.querySelectorAll(selector);
-      if (selector === '.el-table__empty-text,.el-empty__description') return [];
+  Element,
+  Date,
+  AbortController,
+  AbortSignal,
+  localStorage: { getItem: (key) => { assert.equal(key, "userPortalVerifyToken"); return token; } },
+  location: { hostname: "service.chinaums.com", pathname: "/uisportalfront/", hash: "#/auditOfTrade2026" },
+  getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+  document: {
+    body: new Element(),
+    documentElement: new Element(),
+    querySelectorAll(selector) {
+      if (selector === ".el-table") return [table];
       return [];
-    }}
+    }
+  },
+  setTimeout,
+  clearTimeout
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, 'utf8'), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, "utf8"), context);
+
 async function ready(adapter) {
-  assert.equal((await adapter('query')).status, 'clicked');
-  assert.equal((await adapter('queryState', {targetMerchantId:'89813014812B1L3'})).status, 'waiting');
-  now += 501;
-  return adapter('queryState', {targetMerchantId:'89813014812B1L3'});
+  assert.equal((await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" })).status, "set");
+  assert.equal((await adapter("query", { operationDeadline: Date.now() + 10000 })).status, "clicked");
+  return adapter("queryState", { targetMerchantId: "merchant-id" });
 }
+
 (async () => {
   const adapter = context.__chinaumsTradeAuditAdapter;
-  assert.equal((await ready(adapter)).status, 'ready');
-  merchantValues = ['OTHER'];
-  const gate = {allowed:true,merchantId:'89813014812B1L3',authentication:{status:'logged_in',confidence:'high'}};
-  assert.equal((await adapter('submitExport',{gate,targetMerchantId:'89813014812B1L3'})).status,'blocked');
-  assert.equal(exportClicks,0);
-  merchantValues = ['89813014812B1L3'];
-  assert.equal((await adapter('submitExport',{gate,targetMerchantId:'89813014812B1L3'})).status,'clicked');
-  assert.equal(exportClicks,1);
-  merchantValues = [''];
-  assert.equal((await ready(adapter)).status,'failed');
-  merchantValues = ['89813014812B1L3','OTHER'];
-  assert.equal((await ready(adapter)).status,'failed');
-  assert.equal(exportClicks,1);
-  console.log('PASS: trade merchant identity is required and rechecked immediately before export');
-})().catch(error => { console.error(error); process.exitCode = 1; });
+  assert.equal((await ready(adapter)).status, "ready");
+  const gate = {
+    allowed: true,
+    merchantId: "merchant-id",
+    authentication: { status: "logged_in", confidence: "high" }
+  };
+
+  let result = await adapter("submitExport", {
+    gate,
+    targetMerchantId: "merchant-id",
+    operationDeadline: Date.now() + 30000
+  });
+  assert.equal(result.status, "accepted");
+  assert.equal(result.source, "api");
+  assert.equal(queryCalls, 2, "submit must recheck merchant through queryList before applyExport");
+  assert.equal(applyCalls, 1);
+  assert.deepEqual(lastApply.payload, {
+    merOrderId: "",
+    transRef: "",
+    statusList: [],
+    beginTransDate: "20260901",
+    endTransDate: "20260930"
+  });
+  assert.equal(lastApply.options.headers.userPortalToken, "TEST_TOKEN");
+
+  queryMerchantId = "other-merchant";
+  const applyBeforeSwitch = applyCalls;
+  result = await adapter("submitExport", {
+    gate,
+    targetMerchantId: "merchant-id",
+    operationDeadline: Date.now() + 30000
+  });
+  assert.equal(result.status, "blocked");
+  assert.match(result.reason, /商户身份已变化/);
+  assert.equal(applyCalls, applyBeforeSwitch, "merchant switch must stop before applyExport");
+  queryMerchantId = "merchant-id";
+
+  responseData = {
+    success: false,
+    code: "999999",
+    message: "当前已经有超过12条申请在处理中，请稍后",
+    data: null
+  };
+  result = await adapter("submitExport", {
+    gate,
+    targetMerchantId: "merchant-id",
+    operationDeadline: Date.now() + 30000
+  });
+  assert.equal(result.status, "throttled");
+
+  responseData = { success: false, code: "999999", message: "系统异常", data: null };
+  result = await adapter("submitExport", {
+    gate,
+    targetMerchantId: "merchant-id",
+    operationDeadline: Date.now() + 30000
+  });
+  assert.equal(result.status, "unknown");
+
+  token = "";
+  const applyBeforeToken = applyCalls;
+  result = await adapter("submitExport", {
+    gate,
+    targetMerchantId: "merchant-id",
+    operationDeadline: Date.now() + 30000
+  });
+  assert.equal(result.status, "blocked");
+  assert.equal(applyCalls, applyBeforeToken);
+  token = "TEST_TOKEN";
+
+  await adapter("setDateRange", { start: "2026-10-01", end: "2026-10-05" });
+  const applyBeforeUnqueriedRange = applyCalls;
+  result = await adapter("submitExport", {
+    gate,
+    targetMerchantId: "merchant-id",
+    operationDeadline: Date.now() + 30000
+  });
+  assert.equal(result.status, "blocked", "changing range must invalidate the previous query result");
+  assert.equal(applyCalls, applyBeforeUnqueriedRange);
+
+  console.log("PASS: trade applyExport rechecks queryList merchant identity and needs no date/query/export/list UI controls");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
