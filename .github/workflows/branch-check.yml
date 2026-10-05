@@ -12,4 +12,6 @@ jobs:
         with:
           node-version: 22
       - run: node check.cjs
-      - run: git diff --check origin/main HEAD
+      - run: |
+          git fetch origin main --depth=1
+          git diff --check origin/main HEAD
