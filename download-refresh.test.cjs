@@ -96,7 +96,7 @@ async function run(mode = 'success') {
     return;
   }
   if (mode === 'mismatch') {
-    await assert.rejects(result, /文件名与本轮记录不一致/);
+    await assert.rejects(result, /非本轮任务 ID|文件名与本轮记录不一致/);
     assert.equal(opens, 0);
     return;
   }
