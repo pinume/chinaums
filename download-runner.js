@@ -53,11 +53,12 @@
     const generationDeadline = startedAtMs + 6 * 24 * 60 * 60 * 1000;
     let generationWaitStartedAt = null;
 
-    if (reportType === "trade-audit") {
+    if (["trade-audit", "account-detail"].includes(reportType)) {
       const expectedTasks = new Map(submittedMonths.map((month) => [String(month.remoteTaskId || ""), month]));
       if (expectedTasks.has("") || expectedTasks.size !== expectedCount) {
-        throw new Error("缺少本轮已确认的以旧换新暂存任务 ID，不能安全等待生成。");
+        throw new Error("缺少本轮已确认的暂存任务 ID，不能安全等待生成。");
       }
+      const reportLabel = reportType === "trade-audit" ? "以旧换新" : "对账明细";
       let consecutiveApiErrors = 0;
       generationWaitStartedAt = now();
       while (true) {
@@ -75,7 +76,7 @@
         if (snapshot?.status !== "found" || !Array.isArray(snapshot.rows)) {
           consecutiveApiErrors += 1;
           if (consecutiveApiErrors >= 3) {
-            throw new Error(`以旧换新暂存接口连续 3 次读取失败（${snapshot?.reason || snapshot?.status || "unknown"}）；已提交任务保留，禁止重提。`);
+            throw new Error(`${reportLabel}暂存接口连续 3 次读取失败（${snapshot?.reason || snapshot?.status || "unknown"}）；已提交任务保留，禁止重提。`);
           }
           await transition({ status: "WAITING_GENERATION", found: 0, ready: 0, expected: expectedCount,
             waitedMs: now() - generationWaitStartedAt, remaining: expectedCount,
@@ -354,8 +355,8 @@
         }
       }
       if (downloaded.size === expectedCount) break;
-      if (reportType === "trade-audit") {
-        throw new Error("接口已确认本轮以旧换新任务全部生成成功，但下载暂存列表未显示全部任务为可下载状态；未重复打开列表，请手动核对。");
+      if (["trade-audit", "account-detail"].includes(reportType)) {
+        throw new Error(`接口已确认本轮${reportType === "trade-audit" ? "以旧换新" : "对账明细"}任务全部生成成功，但下载暂存列表未显示全部任务为可下载状态；未重复打开列表，请手动核对。`);
       }
       if (Date.now() >= generationDeadline) {
         throw new Error("本轮任务未能在暂存文件保留期限前全部生成；自动流程停止，请手动核对。 ");
