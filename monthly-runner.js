@@ -151,7 +151,9 @@
         }
 
         const responseDeadline = now() + 12000;
-        let response = { status: "unknown" };
+        let response = ["accepted", "throttled", "failed"].includes(submit?.status)
+          ? submit
+          : { status: "unknown", reason: submit?.reason };
         while (submit?.status === "clicked" && now() < responseDeadline) {
           await checkpoint();
           try {
