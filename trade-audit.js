@@ -321,8 +321,7 @@
           if (Date.now() >= deadline) throw new Error("暂存任务读取已超过截止时间。");
         };
         checkDeadline();
-        try {
-          const day = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+        const day = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
           const today = new Date();
           const start = new Date(today); start.setDate(start.getDate() - 7);
           const targetTaskIds = new Set((Array.isArray(args.taskIds) ? args.taskIds : [])
@@ -362,8 +361,7 @@
               return { status: "found", rows: targetTaskIds.size ? rows.filter((row) => targetTaskIds.has(row.id)) : rows };
             }
           }
-          throw new Error("以旧换新暂存任务页数超出读取范围。");
-        }
+        throw new Error("以旧换新暂存任务页数超出读取范围。");
       }
       case "closeDownloadList": {
         const dialogs = downloadDialogs();
