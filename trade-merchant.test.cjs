@@ -15,36 +15,31 @@ let queryCalls = 0;
 let applyCalls = 0;
 let responseData = { success: true, code: "000000", message: "成功", data: null };
 let lastApply = null;
-const table = new Element();
-const component = {
-  $options: { name: "table" },
-  $axiosApi: {
-    axiosPromisePara: async (payload, endpoint, options) => {
-      if (endpoint.endsWith("/queryList")) {
-        queryCalls += 1;
-        return {
-          success: true,
-          code: "000000",
-          message: "成功",
-          data: {
-            size: 10,
-            current: payload.current,
-            total: 1,
-            pages: 1,
-            list: [{ id: `row-${queryCalls}`, mchntId: queryMerchantId, transDate: "20260915" }]
-          }
-        };
+const fetch = async (url, options) => {
+  const payload = JSON.parse(options.body);
+  assert.equal(options.headers.userPortalToken, "TEST_TOKEN");
+  if (url.endsWith("/queryList")) {
+    queryCalls += 1;
+    return { ok: true, status: 200, json: async () => ({
+      success: true,
+      code: "000000",
+      message: "成功",
+      data: {
+        size: 10,
+        current: payload.current,
+        total: 1,
+        pages: 1,
+        list: [{ id: `row-${queryCalls}`, mchntId: queryMerchantId, transDate: "20260915" }]
       }
-      if (endpoint.endsWith("/applyExport")) {
-        applyCalls += 1;
-        lastApply = { payload: JSON.parse(JSON.stringify(payload)), options };
-        return responseData;
-      }
-      throw new Error(endpoint);
-    }
+    }) };
   }
+  if (url.endsWith("/applyExport")) {
+    applyCalls += 1;
+    lastApply = { payload, options };
+    return { ok: true, status: 200, json: async () => responseData };
+  }
+  throw new Error(url);
 };
-table.__vue__ = { $parent: component };
 
 const context = vm.createContext({
   Element,
@@ -54,14 +49,8 @@ const context = vm.createContext({
   localStorage: { getItem: (key) => { assert.equal(key, "userPortalVerifyToken"); return token; } },
   location: { hostname: "service.chinaums.com", pathname: "/uisportalfront/", hash: "#/auditOfTrade2026" },
   getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
-  document: {
-    body: new Element(),
-    documentElement: new Element(),
-    querySelectorAll(selector) {
-      if (selector === ".el-table") return [table];
-      return [];
-    }
-  },
+  document: { body: new Element(), documentElement: new Element(), querySelectorAll: () => [] },
+  fetch,
   setTimeout,
   clearTimeout
 });
