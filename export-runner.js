@@ -367,6 +367,7 @@ const navigateToReport = async () => {
   while (activeNow() < deadline) {
     inspection = await invoke(reportType, "inspect", {});
     if (inspection?.status === "ready" && inspection.hasQuery) return;
+    if (reportType === "account-detail" && inspection?.downloadListOpen === true) return;
     await sleep(400);
   }
   throw new Error(`${reportType === "trade-audit" ? "以旧换新采集2026" : "对账明细"}页控件未就绪（${inspection?.status || "无返回状态"}）：${inspection?.reason || "未找到可用查询入口"}`);
@@ -590,6 +591,7 @@ const run = async () => {
         throw new Error("检测到原先打开的下载暂存列表，但无法安全关闭；尚未开始本轮查询。");
       }
       appendLog("已关闭原先打开的下载暂存列表，准备继续月度查询。");
+      await navigateToReport();
     }
   } else {
     const preexistingList = await invoke(reportType, "closeDownloadList", {});
