@@ -309,7 +309,7 @@ const injectedAdapters = new Set();
 const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => {
   await checkpoint();
   if (operation === "confirmDownload") return waitForDownload(args);
-  const defaultLimit = reportType === "trade-audit" && operation === "setDateRange" ? 60000 : 15000;
+  const defaultLimit = reportType === "trade-audit" && operation === "query" ? 60000 : 15000;
   const operationDeadline = Math.min(Date.now() + defaultLimit, args.operationDeadline ?? Infinity);
   const checkDeadline = () => {
     if (Date.now() >= operationDeadline) throw new Error(`页面操作“${operation}”已超过截止时间。`);
@@ -518,7 +518,7 @@ const run = async () => {
   elements.close.disabled = true;
   await saveState();
 
-  appendLog("下载流程版本：2026-10-05-trade-startup-inspect。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
+  appendLog("下载流程版本：2026-10-05-trade-query-api。正在确认当前银联商务门户仍为高置信度登录；不会打开商户准备页或切换商户。");
   const gate = await verifyCurrentSession();
   const recordMerchant = async (merchantNo, source) => {
     const changed = state.merchantNo !== merchantNo;
