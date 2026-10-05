@@ -15,8 +15,9 @@ vm.runInContext(`${invoke}\nglobalThis.invoke = invoke;`, context);
 (async () => {
   await context.invoke('trade-audit', 'setDateRange');
   await context.invoke('account-detail', 'setDateRange');
+  await context.invoke('trade-audit', 'query');
   await context.invoke('trade-audit', 'submitExport');
-  assert.deepEqual(limits, [['setDateRange',60000], ['setDateRange',15000], ['submitExport',15000]]);
+  assert.deepEqual(limits, [['setDateRange',15000], ['setDateRange',15000], ['query',60000], ['submitExport',60000]]);
   limits.length = 0;
   await context.invoke('trade-audit', 'snapshotExportTasks', {operationDeadline: now + 2000});
   assert.deepEqual(limits, [['snapshotExportTasks',2000]]);
@@ -25,6 +26,6 @@ vm.runInContext(`${invoke}\nglobalThis.invoke = invoke;`, context);
   context.currentFrameId = async () => { now += 3000; return 1; };
   await assert.rejects(context.invoke('trade-audit','snapshotExportTasks',{operationDeadline:now+2000}), /截止时间/);
   assert.equal(adapterCalls,0,'expired frame lookup must not launch an adapter');
-  console.log('PASS: only trade calendar receives 60 seconds; other page operations retain 15 seconds');
+  console.log('PASS: paginated trade query/submit identity checks receive 60 seconds; ordinary page operations retain 15 seconds');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
