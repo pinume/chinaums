@@ -538,14 +538,11 @@
               return {
                 id: String(row.id || ""),
                 fileName: row.exportFileName,
-                filePath: clean(row.exportFilePath, 240) || null,
                 exportStatus,
                 exportStatusDesc,
-                createTime: clean(row.createTime, 80) || null,
-                modifyTime: clean(row.modifyTime, 80) || null,
                 errorMsg,
-                statusCode: exportStatus === "02" && exportStatusDesc === "成功"
-                  ? "ready" : errorMsg || /失败/.test(exportStatusDesc) ? "failed" : "pending"
+                statusCode: errorMsg || /失败/.test(exportStatusDesc)
+                  ? "failed" : exportStatus === "02" && exportStatusDesc === "成功" ? "ready" : "pending"
               };
             }));
             if (rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) {
