@@ -106,9 +106,10 @@ vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, "utf8"), context)
   token = "";
   await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" });
   const beforeMissingToken = calls.length;
-  const blocked = await adapter("query", { operationDeadline: Date.now() + 10000 });
-  assert.equal(blocked.status, "blocked");
-  assert.equal(calls.length, beforeMissingToken, "missing token must block before queryList side effects");
+  const missingToken = await adapter("query", { operationDeadline: Date.now() + 10000 });
+  assert.equal(missingToken.status, "clicked");
+  assert.equal((await adapter("queryState")).status, "failed");
+  assert.equal(calls.length, beforeMissingToken, "missing token must not issue queryList requests");
 
   console.log("PASS: trade queryList reads every page, validates dates/identity, handles no-data, and needs no date/query UI controls");
 })().catch((error) => { console.error(error); process.exitCode = 1; });
