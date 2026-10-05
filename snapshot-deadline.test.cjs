@@ -19,8 +19,9 @@ async function check(trade, mode) {
       return pending;
     }
     now = 4000; // First page arrives after the shared deadline.
-    return trade ? {success:true,data:{list:[{id:'1',exportFileName:'one.xlsx'}],pages:2,total:2}}
-      : {ok:true,json:async()=>({respCode:'000000',list:{content:[{export_id:'1',file_name:'one.xlsx'}],totalPages:2,totalElements:2}})};
+    return trade
+      ? {ok:true,status:200,json:async()=>({success:true,data:{list:[{id:'1',exportFileName:'one.xlsx'}],pages:2,total:2}})}
+      : {ok:true,status:200,json:async()=>({respCode:'000000',list:{content:[{export_id:'1',file_name:'one.xlsx'}],totalPages:2,totalElements:2}})};
   };
   const context = vm.createContext({Date:Clock,Element,AbortController,
     location:{hostname:'service.chinaums.com',pathname:trade?'/uisportalfront':'/uisportal/accountCheckDetailQry/toDetail',hash:'#/auditOfTrade2026'},
