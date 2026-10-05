@@ -124,12 +124,6 @@
     const matches = [...document.querySelectorAll("#crtt_download_xlsx")].filter(visible);
     return matches.length === 1 && !matches[0].disabled ? matches[0] : null;
   };
-  const exportFieldNames = [
-    "settDateBegin", "settDateEnd", "pageSize", "dealDateBegin", "dealDateEnd", "transStatus",
-    "dealType", "busiTypeIdList", "fdId", "zdCode", "amount1", "amount2", "fkhNo",
-    "bankCardNo1", "bankCardNo2", "dealMode", "bingJieFlag", "refNum", "merOrderId",
-    "bankOrder", "searchNo", "searchObj", "fileExt", "regularFee", "d"
-  ];
   const buildExportPayload = (control) => {
     const range = String(queryTracker?.dateValue || "").match(/^(\d{4})\/(\d{2})\/(\d{2})\s~\s(\d{4})\/(\d{2})\/(\d{2})$/);
     if (!range) return { error: "已确认查询日期格式无法转换为导出参数。" };
@@ -142,23 +136,12 @@
     const form = nearest && forms.includes(nearest) ? nearest : forms.length === 1 ? forms[0] : null;
     if (!form) return { error: `导出查询表单缺失或不唯一（${forms.length}）。` };
 
-    const formData = new FormData(form);
     const payload = new URLSearchParams();
-    for (const name of exportFieldNames) {
-      if (name === "fileExt") {
-        payload.append(name, "xlsx");
-        continue;
-      }
-      const values = formData.getAll(name);
-      if (!values.length) {
-        payload.append(name, "");
-        continue;
-      }
-      for (const value of values) {
-        if (typeof value !== "string") return { error: `导出字段 ${name} 包含非文本值。` };
-        payload.append(name, value);
-      }
+    for (const [name, value] of new FormData(form)) {
+      if (typeof value !== "string") return { error: `导出字段 ${name} 包含非文本值。` };
+      payload.append(name, value);
     }
+    payload.set("fileExt", "xlsx");
     if (payload.get("settDateBegin") !== expectedBegin || payload.get("settDateEnd") !== expectedEnd) {
       return { error: "导出表单中的清算日期与刚刚确认的查询结果不一致。" };
     }
