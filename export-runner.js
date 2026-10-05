@@ -177,7 +177,7 @@ const transition = async (event) => {
     QUERY_READY: `${month}：查询结果已更新并稳定。`,
     SUBMITTING: `${month}：查询完成，正在申请 XLSX。`,
     WAITING_FOR_SLOT: event.pending === undefined
-      ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒；对账明细将通过暂存接口检查本轮任务进度后重试。`
+      ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒${reportType === "account-detail" ? "；通过暂存接口检查本轮任务进度后重试" : "，稍后重试当前月"}。`
       : `${month}：等待申请名额，暂存接口显示本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成；不打开下载暂存列表。`,
     NO_DATA: `${month}：明确返回无数据，跳过空文件。`,
     SUBMITTED: `${month}：申请已被服务器接受。`,
