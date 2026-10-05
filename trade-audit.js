@@ -458,8 +458,45 @@
           queryTracker.merchantId !== args.targetMerchantId || merchants.length !== 1 || merchants[0] !== args.targetMerchantId) {
           return { status: "blocked", reason: "当前商户身份无法确认或已切换；未申请导出。" };
         }
-        exactButton("批量导出").click();
-        return { status: "clicked" };
+        const date = tradeDateInput();
+        if (date.error || date.input.value !== queryTracker.dateValue) {
+          return { status: "blocked", reason: "申请导出前交易日期已变化或无法确认。" };
+        }
+        const range = normalizeRangeValue(queryTracker.dateValue)
+          .match(/^(\d{4})\/(\d{2})\/(\d{2})~(\d{4})\/(\d{2})\/(\d{2})$/);
+        if (!range) return { status: "blocked", reason: "已确认交易日期格式无法转换为导出参数。" };
+        const component = reportComponent();
+        if (!component?.$axiosApi?.axiosPromisePara) {
+          return { status: "blocked", reason: "页面导出接口不可用，未申请导出。" };
+        }
+        try {
+          const response = await component.$axiosApi.axiosPromisePara({
+            merOrderId: "",
+            transRef: "",
+            statusList: [],
+            beginTransDate: `${range[1]}${range[2]}${range[3]}`,
+            endTransDate: `${range[4]}${range[5]}${range[6]}`
+          }, "uis-tradein-server/portal/yjhx/v3/applyExport", {
+            signal: AbortSignal.timeout(Math.max(1, Math.min(12000,
+              (args.operationDeadline ?? Date.now() + 12000) - Date.now()))),
+            headers: { userPortalToken: localStorage.getItem("userPortalVerifyToken") }
+          });
+          const code = String(response?.code ?? "");
+          const message = clean(response?.message, 500);
+          if (response?.success === true && code === "000000") {
+            return { status: "accepted", message, source: "api" };
+          }
+          if (response?.success === false && code === "999999" &&
+            /超过\s*\d+\s*条申请在处理中/.test(message)) {
+            return { status: "throttled", message, source: "api" };
+          }
+          return { status: "unknown", reason: message
+            ? `服务器返回 ${code || "无状态码"}：${message}`
+            : "提交接口返回无法识别。" };
+        } catch (error) {
+          return { status: "unknown", reason: error?.name === "TimeoutError"
+            ? "提交接口 12 秒内未返回。" : error?.message || "提交接口调用失败。" };
+        }
       }
       case "classifySubmit":
         return classifySubmit();
