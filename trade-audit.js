@@ -552,25 +552,27 @@
         const close = [...dialogs[0].querySelectorAll(".el-dialog__headerbtn")].filter(visible);
         if (close.length !== 1) return { status: "blocked", reason: "下载暂存列表右上角关闭控件缺失或不唯一。" };
         close[0].click();
-        const isClosed = () => downloadDialogs().length === 0;
-        const closed = await new Promise((resolve) => {
-          if (isClosed()) return resolve(true);
-          let timer;
-          const finish = (value) => {
-            observer.disconnect();
-            clearTimeout(timer);
-            resolve(value);
-          };
-          const observer = new MutationObserver(() => {
+        const component = downloadDialogComponent(dialogs[0]);
+        if (component && component.visible !== false) {
+          const closed = await new Promise((resolve) => {
+            let timer;
+            const isClosed = () => component.visible === false || downloadDialogs().length === 0;
+            const finish = (value) => {
+              observer.disconnect();
+              clearTimeout(timer);
+              resolve(value);
+            };
+            const observer = new MutationObserver(() => {
+              if (isClosed()) finish(true);
+            });
+            observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
+              attributeFilter: ["class", "style", "hidden"] });
+            const deadline = Math.min(Date.now() + 8000, args.operationDeadline ?? Infinity);
+            timer = setTimeout(() => finish(isClosed()), Math.max(0, deadline - Date.now()));
             if (isClosed()) finish(true);
           });
-          observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
-            attributeFilter: ["class", "style", "hidden"] });
-          const deadline = Math.min(Date.now() + 8000, args.operationDeadline ?? Infinity);
-          timer = setTimeout(() => finish(isClosed()), Math.max(0, deadline - Date.now()));
-          if (isClosed()) finish(true);
-        });
-        if (!closed) return { status: "blocked", reason: "点击关闭后，下载暂存列表在8秒内仍保持打开。" };
+          if (!closed) return { status: "blocked", reason: "点击关闭后，下载暂存列表组件在8秒内仍保持打开。" };
+        }
         downloadRefresh?.observer?.disconnect();
         downloadRefresh = null;
         return { status: "closed" };
