@@ -1,9 +1,9 @@
-name: Branch regression check
+name: Final branch verification
 on:
   push:
     branches: [fix/trade-download-wait-stability]
 jobs:
-  test:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -11,3 +11,6 @@ jobs:
         with:
           node-version: 22
       - run: node check.cjs
+      - run: |
+          git fetch origin main --depth=1
+          git diff --check origin/main HEAD
