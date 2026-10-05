@@ -46,6 +46,7 @@ vm.runInContext(fs.readFileSync(__dirname + '/trade-audit.js','utf8'), context);
   assert.deepEqual(Array.from(result.rows, row => row.statusCode), ['ready','pending','failed']);
   assert.equal(result.rows[0].exportStatus, '02');
   assert.equal(result.rows[0].exportStatusDesc, '成功');
+  assert.equal(result.rows[0].createdAt, '2026-10-05 11:14:20');
   assert.equal(result.rows[2].errorMsg, '生成失败');
   console.log('PASS: trade snapshot maps real export status fields and stops pagination after all requested task IDs are found');
 })().catch(error => { console.error(error); process.exitCode = 1; });
