@@ -652,6 +652,26 @@
         matches[0].click();
         return { status: "clicked" };
       }
+      case "downloadTaskDirect": {
+        if (!downloadGateAllowed(args)) return { status: "blocked", reason: "商户门禁未通过，不允许下载。" };
+        const fileMatch = String(args.fileName || "").match(/^MER_([A-Z0-9]+)_\d{14}_yjhx\.xlsx$/i);
+        if (!fileMatch || normalize(fileMatch[1]) !== normalize(args.targetMerchantNo)) {
+          return { status: "blocked", reason: "文件名中的商户号与当前目标不符。" };
+        }
+        const taskId = String(args.taskId || "");
+        if (!/^\d{32}$/.test(taskId)) {
+          return { status: "blocked", reason: "暂存任务 ID 格式无效。" };
+        }
+        const userPortalToken = localStorage.getItem("userPortalVerifyToken");
+        if (!userPortalToken) return { status: "blocked", reason: "页面登录令牌不可用，不允许下载。" };
+        const frame = document.createElement("iframe");
+        frame.hidden = true;
+        frame.setAttribute("aria-hidden", "true");
+        frame.src = `/uisportal/api/uis-tradein-server/portal/yjhx/v3/downloadExportFile/${encodeURIComponent(taskId)}?userPortalToken=${encodeURIComponent(userPortalToken)}`;
+        document.body.append(frame);
+        setTimeout(() => frame.remove(), 60000);
+        return { status: "download_requested" };
+      }
       case "downloadTask": {
         if (!downloadGateAllowed(args)) return { status: "blocked", reason: "商户门禁未通过，不允许下载。" };
         const expectedFile = new RegExp(
