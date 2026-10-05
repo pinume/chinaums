@@ -242,66 +242,47 @@
           await transition({ month: month.key, status: "WAITING_FOR_SLOT", retryInMs: waitMs, attempt: throttleAttempts });
           const end = now() + waitMs;
           if (reportType === "account-detail") {
-            const files = new Set(results.filter((item) => item.status === "SUBMITTED")
-              .map((item) => item.remoteFileName).filter(Boolean));
+            const submittedTasks = results.filter((item) => item.status === "SUBMITTED" &&
+              item.remoteTaskId && item.remoteFileName);
             let baselinePending = null;
             let slotReleased = false;
-            let listOpened = false;
-            const closeSlotList = async () => {
-              const closedList = await invoke("closeDownloadList", {});
-              if (!["closed", "already_closed"].includes(closedList?.status)) throw new Error("限流等待期间暂存列表无法关闭。");
-              const deadline = now() + 5000;
-              while (now() < deadline) {
-                await checkpoint();
-                if (["not_found", "not_open"].includes((await invoke("parseDownloadTasks", {}))?.status)) { listOpened = false; return; }
-                await sleep(200);
-              }
-              throw new Error("限流等待期间暂存列表关闭结果无法确认。");
-            };
             try {
-              while (files.size && now() < end) {
+              while (submittedTasks.length && now() < end) {
                 await checkpoint();
-                const opened = await invoke("openDownloadList", {});
-                if (!["clicked", "already_open"].includes(opened?.status)) break;
-                listOpened = true;
-                const readDeadline = Math.min(end, now() + 15000);
-                let list;
-                do {
-                  await checkpoint();
-                  list = await invoke("parseDownloadTasks", {});
-                  if (["found", "empty", "refresh_error"].includes(list?.status)) break;
-                  await sleep(200);
-                } while (now() < readDeadline);
-                if (list?.status !== "found") break;
-                const pageSize = await invoke("setDownloadPageSize", {});
-                if (pageSize?.status === "set") {
-                  do {
-                    await checkpoint();
-                    list = await invoke("parseDownloadTasks", {});
-                    if (["found", "empty", "refresh_error"].includes(list?.status)) break;
-                    await sleep(200);
-                  } while (now() < readDeadline);
+                const taskIds = submittedTasks.map((item) => String(item.remoteTaskId));
+                const snapshot = await invoke("snapshotExportTasks", {
+                  taskIds,
+                  operationDeadline: Date.now() + Math.min(15000, Math.max(0, end - now()))
+                });
+                if (snapshot?.status !== "found" || !Array.isArray(snapshot.rows)) break;
+                const byId = new Map(snapshot.rows.map((row) => [String(row.id || ""), row]));
+                const rows = submittedTasks.map((item) => byId.get(String(item.remoteTaskId))).filter(Boolean);
+                if (rows.length !== submittedTasks.length) break;
+                let identityValid = true;
+                for (let index = 0; index < submittedTasks.length; index += 1) {
+                  if (rows[index].fileName !== submittedTasks[index].remoteFileName ||
+                    !["pending", "ready"].includes(rows[index].statusCode)) {
+                    identityValid = false;
+                    break;
+                  }
                 }
-                const rows = list?.rows?.filter((row) => files.has(row.fileName)) || [];
-                if (list?.status !== "found" || rows.length !== files.size || new Set(rows.map((row) => row.fileName)).size !== files.size || rows.some((row) => !["pending", "ready"].includes(row.statusCode))) break;
+                if (!identityValid) break;
                 const pending = rows.filter((row) => row.statusCode === "pending").length;
-                await transition({ month: month.key, status: "WAITING_FOR_SLOT", retryInMs: Math.max(0, end - now()), attempt: throttleAttempts, pending, generated: rows.length - pending });
-                await closeSlotList();
-                if (baselinePending !== null && pending < baselinePending) { slotReleased = true; break; }
-                if (pending === 0) break;
+                await transition({ month: month.key, status: "WAITING_FOR_SLOT",
+                  retryInMs: Math.max(0, end - now()), attempt: throttleAttempts,
+                  pending, generated: rows.length - pending, slotSource: "api" });
+                if (pending === 0 || (baselinePending !== null && pending < baselinePending)) {
+                  slotReleased = true;
+                  break;
+                }
                 baselinePending = pending;
                 await sleep(Math.min(10000, Math.max(0, end - now())));
               }
             } catch (error) {
               if (error?.message === "STOPPED_BY_USER") throw error;
-              // 读取失败时保留原有退避，不推断任务已受理或重新提交旧月份。
-            } finally {
-              if (listOpened) {
-                await closeSlotList();
-              }
+              // 接口读取失败时保留原有退避；服务器仍是下一次提交是否允许的最终判断。
             }
             if (slotReleased || now() >= end) {
-              // 名额释放或等待窗口结束后，服务器仍是是否允许申请的最终判断。
               continue;
             }
           }
