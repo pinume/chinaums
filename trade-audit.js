@@ -516,6 +516,8 @@
           const day = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
           const today = new Date();
           const start = new Date(today); start.setDate(start.getDate() - 7);
+          const targetTaskIds = new Set((Array.isArray(args.taskIds) ? args.taskIds : [])
+            .map((id) => String(id || "")).filter(Boolean));
           const rows = [];
           for (let current = 0; current < 100; current += 1) {
             checkDeadline();
@@ -529,10 +531,32 @@
             });
             checkDeadline();
             if (!response?.success || !Array.isArray(response.data?.list)) throw new Error("以旧换新暂存接口结构异常。");
-            rows.push(...response.data.list.map((row) => ({ id: String(row.id || ""), fileName: row.exportFileName })));
+            rows.push(...response.data.list.map((row) => {
+              const exportStatus = clean(row.exportStatus, 40);
+              const exportStatusDesc = clean(row.exportStatusDesc, 80);
+              const errorMsg = clean(row.errorMsg, 240) || null;
+              return {
+                id: String(row.id || ""),
+                fileName: row.exportFileName,
+                filePath: clean(row.exportFilePath, 240) || null,
+                exportStatus,
+                exportStatusDesc,
+                createTime: clean(row.createTime, 80) || null,
+                modifyTime: clean(row.modifyTime, 80) || null,
+                errorMsg,
+                statusCode: exportStatus === "02" && exportStatusDesc === "成功"
+                  ? "ready" : errorMsg || /失败/.test(exportStatusDesc) ? "failed" : "pending"
+              };
+            }));
+            if (rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) {
+              throw new Error("以旧换新暂存任务身份缺失或重复。");
+            }
+            if (targetTaskIds.size && [...targetTaskIds].every((id) => rows.some((row) => row.id === id))) {
+              return { status: "found", rows: rows.filter((row) => targetTaskIds.has(row.id)) };
+            }
             if (current + 1 >= Number(response.data.pages)) {
-              if (rows.length !== Number(response.data.total) || rows.some((row) => !row.id || !row.fileName) || new Set(rows.map((row) => row.id)).size !== rows.length) throw new Error("以旧换新暂存任务分页不完整或身份重复。");
-              return { status: "found", rows };
+              if (!targetTaskIds.size && rows.length !== Number(response.data.total)) throw new Error("以旧换新暂存任务分页不完整。");
+              return { status: "found", rows: targetTaskIds.size ? rows.filter((row) => targetTaskIds.has(row.id)) : rows };
             }
           }
           throw new Error("以旧换新暂存任务页数超出读取范围。");
