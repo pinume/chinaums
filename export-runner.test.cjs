@@ -97,21 +97,14 @@ context.chrome = {
       if (args[1] === "snapshotExportTasks") return [{result: {status: "found", rows: []}}];
     }
     assert(!["setDateRange", "query", "submitExport"].includes(args[1]), "stop must prevent export submission");
-    if (trade && args[1] === "openDownloadList") return [{result: {status: "clicked"}}];
-    if (trade && args[1] === "parseDownloadTasks") {
-      const now = new Date();
-      const stamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
-      return [{result: {status: "found", rows: [{createdAt: `${stamp.slice(0,4)}-${stamp.slice(4,6)}-${stamp.slice(6,8)} ${stamp.slice(8,10)}:${stamp.slice(10,12)}:${stamp.slice(12,14)}`, fileName: `MER_${merchantNo}_${stamp}_yjhx.xlsx`}]}}];
-    }
     if (args[1] === "inspect") return [{ result: {
-      status: !trade && downloadListOpen ? "controls_missing" : "ready",
-      hasQuery: trade || !downloadListOpen,
-      hasDownloadList: true,
-      ...(trade ? {} : { downloadListOpen })
+      status: downloadListOpen ? "controls_missing" : "ready",
+      hasQuery: !downloadListOpen,
+      downloadListOpen
     } }];
     if (args[1] === "closeDownloadList") {
       startupCloseCalls += 1;
-      if (!trade && downloadListOpen) {
+      if (downloadListOpen) {
         downloadListOpen = false;
         return [{ result: { status: "closed" } }];
       }
@@ -146,10 +139,8 @@ completed.then((state) => {
   assert.equal(state.merchantNo, merchantNo);
   assert(elements.get("#export-target").textContent.includes(merchantNo), "both reports must display the identified merchant");
   assert.equal(adapterInjections, 1, "replace a preexisting adapter once without resetting it for every operation");
-  if (!trade) {
-    assert.equal(startupCloseCalls, process.argv.includes("LIST_OPEN") ? 1 : 0,
-      "account startup must only touch the download list when inspect confirms it is already open");
-  }
+  assert.equal(startupCloseCalls, process.argv.includes("LIST_OPEN") ? 1 : 0,
+    `${trade ? "trade" : "account"} startup must only touch the download list when inspect confirms it is already open`);
   assert.equal(state.logs.filter((message) => message.startsWith("已识别本轮")).length, 1,
     "unchanged polling results must not spam the log");
   console.log(`PASS: ${prior.status} starts a fresh run and archives old state`);
