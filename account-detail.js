@@ -36,118 +36,154 @@
   const hasDownloadList = () => downloadDialogs().length === 1;
   const downloadGateAllowed = (args) => args.gate?.allowed === true &&
     normalize(args.gate.merchantNo) === normalize(args.targetMerchantNo) && Boolean(args.targetMerchantNo);
-  const field = () => {
-    const matches = [...document.querySelectorAll("#settDate")].filter(visible);
-    if (matches.length !== 1 || !(matches[0] instanceof HTMLInputElement) || matches[0].disabled) {
-      return { error: `清算时间控件不唯一或不可用（${matches.length}）。` };
-    }
-    let context = matches[0];
-    for (let depth = 0; context && depth < 5; depth += 1, context = context.parentElement) {
-      if (/清算时间/.test(textOf(context))) return { input: matches[0] };
-    }
-    return { error: "#settDate 附近未能确认“清算时间”标签，未修改日期。" };
+  const QUERY_FIELDS = [
+    "settDateBegin", "settDateEnd", "pageSize", "dealDateBegin", "dealDateEnd", "transStatus",
+    "dealType", "busiTypeIdList", "fdId", "zdCode", "amount1", "amount2", "fkhNo",
+    "bankCardNo1", "bankCardNo2", "dealMode", "bingJieFlag", "refNum", "merOrderId",
+    "bankOrder", "searchNo", "searchObj"
+  ];
+  const compactDate = (value) => {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const date = new Date(year, month - 1, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+    return `${match[1]}${match[2]}${match[3]}`;
   };
-  const queryControl = () => {
-    const matches = [...document.querySelectorAll("#d_search")]
-      .filter(visible)
-      .filter((element) => normalize(textOf(element)) === "查询");
-    return matches.length === 1 && !matches[0].disabled ? matches[0] : null;
-  };
-  const resultSignature = () => {
-    const bodyText = textOf(document.body);
-    const count = bodyText.match(/根据输入条件共查询到\s*([\d,]+)\s*条/);
-    const tableRows = [...document.querySelectorAll("table tr")]
-      .filter(visible)
-      .map((row) => textOf(row))
-      .filter((text) => text && !/清算时间|交易时间|申请下载xlsx/.test(text))
-      .slice(0, 3);
-    const emptyText = bodyText.match(/暂无数据[^。\n]*/)?.[0] || "";
-    return JSON.stringify({ count: count?.[1]?.replace(/,/g, "") ?? null, tableRows, emptyText });
-  };
-  const queryResultMerchantNumbers = () => {
-    const values = [];
-    for (const table of [...document.querySelectorAll("table")].filter(visible)) {
-      const rows = [...table.querySelectorAll("tr")].filter(visible);
-      const headerIndex = rows.findIndex((row) => [...row.children]
-        .some((cell) => /^(商户号|商户编号)$/.test(normalize(textOf(cell)))));
-      if (headerIndex < 0) continue;
-      const headers = [...rows[headerIndex].children];
-      const merchantIndex = headers.findIndex((cell) => /^(商户号|商户编号)$/.test(normalize(textOf(cell))));
-      if (merchantIndex < 0) continue;
-      for (const row of rows.slice(headerIndex + 1)) {
-        const merchantCell = [...row.children][merchantIndex];
-        const merchantNo = normalize(textOf(merchantCell));
-        if (merchantNo) values.push(merchantNo);
-      }
-    }
-    return [...new Set(values)];
-  };
-  const queryBusy = () => {
-    const buttons = [...document.querySelectorAll("#d_search")].filter(visible);
-    const button = buttons.length === 1 ? buttons[0] : null;
-    return Boolean(
-      [...document.querySelectorAll(".el-loading-mask,.layui-layer-loading,.loading")].some(visible) ||
-      (button && (button.disabled || /查询中|加载中/.test(textOf(button))))
-    );
-  };
-  // Record short loading cycles and redraws even when the next poll sees identical results.
-  const observeQuery = (control) => {
-    const tracker = queryTracker;
-    if (typeof MutationObserver !== "function") return;
-    tracker.observer = new MutationObserver((records) => {
-      if (queryTracker !== tracker) return;
-      const loadingSelector = ".el-loading-mask,.layui-layer-loading,.loading";
-      if (queryBusy() || records.some((record) =>
-        (record.target instanceof Element && record.target.matches(loadingSelector)) ||
-        [...(record.addedNodes || []), ...(record.removedNodes || [])].some((node) =>
-          node instanceof Element && (node.matches(loadingSelector) || node.querySelector(loadingSelector))) ||
-        (record.target === control && record.attributeName === "disabled" && record.oldValue !== null))) {
-        tracker.observedLoading = true;
-        tracker.candidate = null;
-      }
-      if (records.some((record) => {
-        if (!["childList", "characterData"].includes(record.type)) return false;
-        const target = record.target instanceof Element ? record.target : record.target.parentElement;
-        const result = target?.closest("table");
-        return result && !result.closest("#downloadList,.loadSave-row") &&
-          [...result.querySelectorAll("th,td")].some((cell) => /^(商户号|商户编号)$/.test(normalize(textOf(cell))));
-      })) {
-        tracker.candidate = null;
-      }
-    });
-    tracker.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true,
-      attributes: true, attributeOldValue: true, attributeFilter: ["class", "style", "disabled"] });
-  };
-  const finishQueryObservation = () => queryTracker?.observer?.disconnect();
-
-  const exportControl = () => {
-    const matches = [...document.querySelectorAll("#crtt_download_xlsx")].filter(visible);
-    return matches.length === 1 && !matches[0].disabled ? matches[0] : null;
-  };
-  const buildExportPayload = (control) => {
-    const range = String(queryTracker?.dateValue || "").match(/^(\d{4})\/(\d{2})\/(\d{2})\s~\s(\d{4})\/(\d{2})\/(\d{2})$/);
-    if (!range) return { error: "已确认查询日期格式无法转换为导出参数。" };
-    const expectedBegin = `${range[1]}${range[2]}${range[3]}`;
-    const expectedEnd = `${range[4]}${range[5]}${range[6]}`;
+  const accountForm = () => {
     const forms = [...document.querySelectorAll("form")].filter((form) =>
       form.querySelector('[name="settDateBegin"]') && form.querySelector('[name="settDateEnd"]')
     );
-    const nearest = control?.closest("form");
-    const form = nearest && forms.includes(nearest) ? nearest : forms.length === 1 ? forms[0] : null;
-    if (!form) return { error: `导出查询表单缺失或不唯一（${forms.length}）。` };
-
-    const payload = new URLSearchParams();
+    return forms.length === 1 ? forms[0] : null;
+  };
+  const formParams = (form, allowed = null) => {
+    const params = new URLSearchParams();
     for (const [name, value] of new FormData(form)) {
-      if (typeof value !== "string") return { error: `导出字段 ${name} 包含非文本值。` };
-      payload.append(name, value);
+      if (typeof value !== "string") throw new Error(`字段 ${name} 包含非文本值。`);
+      if (!allowed || allowed.has(name)) params.append(name, value);
     }
+    return params;
+  };
+  const buildQueryPayload = (pageNumber) => {
+    if (!queryTracker?.beginSettDate || !queryTracker?.endSettDate) {
+      return { error: "查询日期尚未安全设置。" };
+    }
+    const form = accountForm();
+    if (!form) return { error: "对账明细查询表单缺失或不唯一。" };
+    let payload;
+    try {
+      payload = formParams(form, new Set(QUERY_FIELDS));
+    } catch (error) {
+      return { error: error.message };
+    }
+    for (const name of QUERY_FIELDS) {
+      if (!payload.has(name)) payload.set(name, "");
+    }
+    payload.set("settDateBegin", queryTracker.beginSettDate);
+    payload.set("settDateEnd", queryTracker.endSettDate);
+    payload.set("pageNumber", String(pageNumber));
+    const pageSize = Number(payload.get("pageSize"));
+    if (!Number.isInteger(pageSize) || pageSize <= 0) return { error: "查询表单中的 pageSize 无效。" };
+    return { payload, pageSize };
+  };
+  const querySignature = (payload) => {
+    const copy = new URLSearchParams(payload);
+    copy.delete("pageNumber");
+    return copy.toString();
+  };
+  const readAccountQuery = async (deadline) => {
+    const first = buildQueryPayload(1);
+    if (first.error) throw new Error(first.error);
+    const expectedSignature = querySignature(first.payload);
+    const rows = [];
+    let totalPages = null;
+    let totalElements = null;
+    for (let pageNumber = 1; ; pageNumber += 1) {
+      if (Date.now() >= deadline) throw new Error("对账明细查询已超过截止时间。");
+      const built = buildQueryPayload(pageNumber);
+      if (built.error) throw new Error(built.error);
+      if (built.pageSize !== first.pageSize || querySignature(built.payload) !== expectedSignature) {
+        throw new Error("对账明细查询条件在分页读取过程中发生变化。");
+      }
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
+      let response;
+      try {
+        response = await fetch("/uisportal/accountCheckDetailQry/qryAccountCheck", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "X-Requested-With": "XMLHttpRequest"
+          },
+          body: built.payload.toString(),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!response?.ok) throw new Error(`对账明细查询接口 HTTP ${response?.status ?? "unknown"}。`);
+      const data = await response.json();
+      if (String(data?.respCode ?? "") !== "000000" || !Array.isArray(data?.pageObj?.content)) {
+        throw new Error("对账明细查询接口结构异常。");
+      }
+      const page = data.pageObj;
+      const currentPages = Number(page.totalPages);
+      const currentTotal = Number(page.totalElements);
+      const number = Number(page.number);
+      const size = Number(page.size);
+      if (!Number.isInteger(currentPages) || currentPages < 0 ||
+        !Number.isInteger(currentTotal) || currentTotal < 0 ||
+        number !== pageNumber - 1 || size !== first.pageSize) {
+        throw new Error("对账明细查询分页信息异常。");
+      }
+      totalPages ??= currentPages;
+      totalElements ??= currentTotal;
+      if (currentPages !== totalPages || currentTotal !== totalElements) {
+        throw new Error("对账明细查询总页数或总条数在分页读取过程中发生变化。");
+      }
+      rows.push(...page.content);
+      if (currentTotal === 0) {
+        if (pageNumber !== 1 || page.content.length !== 0) throw new Error("对账明细空查询分页结构异常。");
+        break;
+      }
+      if (currentPages < 1 || pageNumber > currentPages) throw new Error("对账明细查询页数异常。");
+      if (pageNumber >= currentPages) break;
+    }
+    if (rows.length !== totalElements ||
+      rows.some((row) => !row?.mer_no || !/^\d{8}$/.test(String(row.sett_date || ""))) ||
+      rows.some((row) => String(row.sett_date) < queryTracker.beginSettDate ||
+        String(row.sett_date) > queryTracker.endSettDate)) {
+      throw new Error("对账明细查询结果分页不完整或身份异常。");
+    }
+    const merchants = [...new Set(rows.map((row) => normalize(row.mer_no)).filter(Boolean))];
+    if (totalElements > 0 && merchants.length !== 1) {
+      throw new Error("对账明细查询结果没有唯一商户号；未申请导出。");
+    }
+    return {
+      count: totalElements,
+      merchantNo: merchants[0] || null,
+      filterSignature: expectedSignature
+    };
+  };
+
+  const buildExportPayload = () => {
+    if (!queryTracker?.beginSettDate || !queryTracker?.endSettDate) {
+      return { error: "已确认查询日期缺失。" };
+    }
+    const form = accountForm();
+    if (!form) return { error: "导出查询表单缺失或不唯一。" };
+    let payload;
+    try {
+      payload = formParams(form);
+    } catch (error) {
+      return { error: error.message };
+    }
+    payload.set("settDateBegin", queryTracker.beginSettDate);
+    payload.set("settDateEnd", queryTracker.endSettDate);
     payload.set("fileExt", "xlsx");
-    const beginValues = payload.getAll("settDateBegin");
-    const endValues = payload.getAll("settDateEnd");
-    if (beginValues.length !== 1 || endValues.length !== 1 ||
-      beginValues[0] !== expectedBegin || endValues[0] !== expectedEnd) {
-      return { error: "导出表单中的清算日期与刚刚确认的查询结果不一致或不唯一。" };
-    }
     return { payload };
   };
   const classifyExportResponse = (data) => {
@@ -267,15 +303,6 @@
     };
   };
 
-  const dispatchValue = (input, value) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (setter) setter.call(input, value);
-    else input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    input.dispatchEvent(new Event("blur", { bubbles: true }));
-  };
-
   globalThis.__chinaumsAccountDetailAdapter = async (operation, args = {}) => {
     if (!onReportPage() && !(operation === "parseDownloadTasks" && hasDownloadList()) &&
       !(operation === "downloadTask" && hasDownloadList()) &&
@@ -287,129 +314,98 @@
     switch (operation) {
       case "submitDialogState":
         return { status: visibleModals().filter((dialog) => textOf(dialog)).length === 0 ? "clear" : "visible" };
-      case "inspect": {
-        const dateField = field();
+      case "inspect":
         return {
-          status: dateField.error ? "controls_missing" : "ready",
-          dateValue: dateField.input?.value ?? null,
-          hasQuery: Boolean(queryControl()),
-          hasExport: Boolean(exportControl()),
-          hasDownloadList: [...document.querySelectorAll("button#download")].filter(visible)
-            .filter((element) => !element.disabled).length === 1,
+          status: accountForm() ? "ready" : "controls_missing",
+          reason: accountForm() ? null : "对账明细查询表单缺失或不唯一。",
+          hasQuery: Boolean(accountForm()),
           downloadListOpen: hasDownloadList()
         };
-      }
       case "setDateRange": {
-        const dateField = field();
-        if (dateField.error) return { status: "failed", reason: dateField.error };
-        const { start, end } = args;
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(start || "") || !/^\d{4}-\d{2}-\d{2}$/.test(end || "")) {
-          return { status: "failed", reason: "日期参数必须是 YYYY-MM-DD。" };
+        const beginSettDate = compactDate(args.start);
+        const endSettDate = compactDate(args.end);
+        if (!beginSettDate || !endSettDate || beginSettDate > endSettDate) {
+          return { status: "failed", reason: "日期参数无效。" };
         }
-        const format = (value) => value.replace(/-/g, "/");
-        const value = `${format(start)} ~ ${format(end)}`;
-        dispatchValue(dateField.input, value);
-        if (normalize(dateField.input.value) !== normalize(value)) {
-          return { status: "failed", reason: "清算时间输入框未保留目标日期，未继续查询。" };
-        }
-        finishQueryObservation();
-        queryTracker = null;
-        return { status: "set", value };
+        queryTracker = {
+          beginSettDate,
+          endSettDate,
+          resultState: "set",
+          count: null,
+          merchantNo: null,
+          filterSignature: null,
+          reason: null
+        };
+        return { status: "set", beginSettDate, endSettDate };
       }
       case "query": {
-        if (visibleModals().filter((dialog) => textOf(dialog)).length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不启动下一次查询。" };
-        const control = queryControl();
-        if (!control) return { status: "controls_missing", reason: "“查询”按钮缺失或不唯一。" };
-        const dateField = field();
-        if (dateField.error || !dateField.input.value.trim()) {
-          return { status: "failed", reason: dateField.error || "清算时间为空，未提交查询。" };
+        if (visibleModals().filter((dialog) => textOf(dialog)).length > 0) {
+          return { status: "blocked", reason: "弹窗尚未关闭，不启动下一次查询。" };
         }
-        if (!/^\d{4}\/\d{2}\/\d{2}\s~\s\d{4}\/\d{2}\/\d{2}$/.test(dateField.input.value.trim())) {
-          return { status: "failed", reason: "清算时间格式不符合页面要求（yyyy/MM/dd ~ yyyy/MM/dd），未提交查询。" };
+        if (!queryTracker?.beginSettDate || !queryTracker?.endSettDate) {
+          return { status: "failed", reason: "查询日期尚未安全设置。" };
         }
-        finishQueryObservation();
-        queryTracker = {
-          dateValue: dateField.input.value,
-          baseline: resultSignature(),
-          observedLoading: false,
-          candidate: null,
-          candidateSince: 0
-        };
-        observeQuery(control);
-        control.click();
-        queryTracker.observedLoading ||= queryBusy();
-        return { status: "clicked" };
+        queryTracker.resultState = "querying";
+        try {
+          const result = await readAccountQuery(args.operationDeadline ?? Date.now() + 60000);
+          Object.assign(queryTracker, result.count === 0
+            ? { resultState: "no_data", count: 0, merchantNo: null, filterSignature: result.filterSignature, reason: null }
+            : { resultState: "ready", count: result.count, merchantNo: result.merchantNo,
+              filterSignature: result.filterSignature, reason: null });
+        } catch (error) {
+          Object.assign(queryTracker, {
+            resultState: "failed",
+            count: null,
+            merchantNo: null,
+            filterSignature: null,
+            reason: error?.name === "AbortError" ? "对账明细查询接口在截止时间前未完成。" :
+              error?.message || "对账明细查询接口调用失败。"
+          });
+        }
+        return { status: "clicked", source: "api" };
       }
       case "queryState": {
-        if (!queryTracker) return { status: "waiting" };
-        const dateField = field();
-        if (dateField.error || dateField.input.value !== queryTracker.dateValue) {
-          finishQueryObservation();
-          return { status: "failed", reason: "查询期间清算时间发生变化或无法确认。" };
+        if (!queryTracker || ["set", "querying"].includes(queryTracker.resultState)) return { status: "waiting" };
+        if (queryTracker.resultState === "failed") {
+          return { status: "failed", reason: queryTracker.reason || "对账明细查询失败。" };
         }
-        if (queryBusy()) {
-          queryTracker.candidate = null;
-          queryTracker.observedLoading = true;
-          return { status: "waiting" };
-        }
-        if (!queryTracker.observedLoading && resultSignature() === queryTracker.baseline) {
-          return { status: "waiting" };
-        }
-        const signature = resultSignature();
-        if (queryTracker.candidate !== signature) {
-          queryTracker.candidate = signature;
-          queryTracker.candidateSince = Date.now();
-          return { status: "waiting" };
-        }
-        if (Date.now() - queryTracker.candidateSince < 500) return { status: "waiting" };
-        const bodyText = textOf(document.body);
-        const match = bodyText.match(/根据输入条件共查询到\s*([\d,]+)\s*条/);
-        if (match) {
-          const count = Number(match[1].replace(/,/g, ""));
-          if (count === 0) {
-            queryTracker.resultState = "no_data";
-            finishQueryObservation();
-            return { status: "no_data", count };
+        if (queryTracker.resultState === "no_data") return { status: "no_data", count: 0 };
+        if (queryTracker.resultState === "ready") {
+          const expectedMerchantNo = normalize(args.targetMerchantNo);
+          if (expectedMerchantNo && queryTracker.merchantNo !== expectedMerchantNo) {
+            return { status: "failed", reason: "当前查询结果商户号与本轮已确认商户号不一致，未申请导出。" };
           }
-          const currentResult = JSON.parse(signature);
-          if (currentResult.tableRows.length > 0 && exportControl()) {
-            const expectedMerchantNo = normalize(args.targetMerchantNo);
-            const merchantNumbers = queryResultMerchantNumbers();
-            if (merchantNumbers.length !== 1) {
-              const reason = merchantNumbers.length === 0
-                ? "查询结果中未读取到商户号"
-                : `查询结果中出现多个商户号（${merchantNumbers.join("、")}）`;
-              finishQueryObservation();
-              return { status: "failed", reason: `${reason}，未申请导出。` };
-            }
-            const actualMerchantNo = merchantNumbers[0];
-            if (expectedMerchantNo && actualMerchantNo !== expectedMerchantNo) {
-              finishQueryObservation();
-              return {
-                status: "failed",
-                reason: `当前查询结果商户号 ${actualMerchantNo} 与本次已确认商户号 ${expectedMerchantNo} 不一致，未申请导出。`
-              };
-            }
-            queryTracker.merchantNo = actualMerchantNo;
-            queryTracker.resultState = "ready";
-            finishQueryObservation();
-            return { status: "ready", count, merchantNo: actualMerchantNo };
-          }
+          return { status: "ready", count: queryTracker.count, merchantNo: queryTracker.merchantNo };
         }
-        return { status: "waiting" };
+        return { status: "failed", reason: "对账明细查询结果状态无法识别。" };
       }
       case "submitExport": {
         if (visibleModals().filter((dialog) => textOf(dialog)).length > 0) return { status: "blocked", reason: "弹窗尚未关闭，不申请导出。" };
         const gate = args.gate;
         if (gate?.allowed !== true || normalize(gate.merchantNo) !== normalize(args.targetMerchantNo) ||
-          queryTracker?.merchantNo !== normalize(args.targetMerchantNo) || !args.targetMerchantNo) {
+          queryTracker?.merchantNo !== normalize(args.targetMerchantNo) || !args.targetMerchantNo ||
+          queryTracker?.resultState !== "ready" || !Number.isInteger(queryTracker.count) || queryTracker.count <= 0) {
           return { status: "blocked", reason: "当前查询结果商户号尚未确认或与本轮商户号不一致，不允许申请导出。" };
         }
-        const control = exportControl();
-        if (!control || queryTracker?.resultState !== "ready" || !/根据输入条件共查询到/.test(textOf(document.body))) {
-          return { status: "blocked", reason: "查询结果未就绪或 XLSX 申请入口不唯一。" };
+        const verifyDeadline = Math.min(
+          (args.operationDeadline ?? Date.now() + 60000) - 12000,
+          Date.now() + 45000
+        );
+        if (verifyDeadline <= Date.now()) {
+          return { status: "blocked", reason: "提交前商户接口复核没有剩余安全时间。" };
         }
-        const prepared = buildExportPayload(control);
+        let verified;
+        try {
+          verified = await readAccountQuery(verifyDeadline);
+        } catch (error) {
+          return { status: "blocked", reason: `提交前接口复核失败：${error?.message || "查询身份无法确认"}` };
+        }
+        if (verified.count <= 0 || verified.merchantNo !== queryTracker.merchantNo ||
+          verified.merchantNo !== normalize(args.targetMerchantNo) ||
+          verified.filterSignature !== queryTracker.filterSignature) {
+          return { status: "blocked", reason: "提交前接口复核发现商户、查询条件或数据状态已变化；未申请导出。" };
+        }
+        const prepared = buildExportPayload();
         if (prepared.error) return { status: "blocked", reason: prepared.error };
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 12000);
