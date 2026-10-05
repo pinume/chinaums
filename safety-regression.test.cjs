@@ -22,33 +22,52 @@ const month = {key: '2026-01', start: '2026-01-01', end: '2026-01-31'};
 
 async function reconcile(mode) {
   now = new Date(2026, 8, 30, 12, 0, 1).getTime();
-  let page = 2;
-  const visited = [];
   context.state = {months: {}};
-  context.invoke = async (_, operation, args) => {
-    if (operation === 'classifySubmit') return mode === 'bound' ? {status: 'accepted', fileName} : {status: 'unknown'};
-    if (operation === 'closeSubmitDialog') return {status: 'closed'};
-    if (operation === 'openDownloadList') { assert.equal(args.targetMerchantNo, merchantNo); return {status: 'clicked'}; }
-    if (operation === 'closeDownloadList') return {status: 'closed'};
-    if (operation === 'selectDownloadPage') { page = args.page; return {status: 'clicked'}; }
-    if (operation === 'nextDownloadPage') {
-      if (mode === 'failed-page') return {status: 'blocked'};
-      if (mode !== 'stuck-page') page++;
-      return {status: 'clicked'};
-    }
-    if (operation === 'parseDownloadTasks') {
-      visited.push(page);
-      return {status: 'found', page, hasNext: page === 1,
-        rows: page === 1 ? [{fileName, createdAt: mode === 'bound' ? '2026-09-30 12:00:30' : '2026-09-30 12:00:01'}]
-          : mode === 'multiple' ? [{fileName: otherFile, createdAt: '2026-09-30 12:00:02'}] : mode === 'duplicate' ? [{fileName, createdAt: '2026-09-30 12:00:01'}] : []};
-    }
-    throw new Error(operation);
+  const baselineId = '11111111111111111111111111111111';
+  const taskId = '20260930120002681550426941423616';
+  const calls = [];
+  context.invoke = async (_, operation) => {
+    calls.push(operation);
+    assert.equal(operation, 'snapshotExportTasks', 'trade UNKNOWN reconciliation must not use dialog or download-list UI');
+    if (mode === 'read-error') throw new Error('temporary API failure');
+    const rows = mode === 'no-new' ? [{
+      id: baselineId, fileName: `MER_${merchantNo}_20260930110000_yjhx.xlsx`, createdAt: '2026-09-30 11:00:00'
+    }] : [{
+      id: taskId,
+      fileName: mode === 'merchant-mismatch'
+        ? 'MER_OTHER_20260930120002_yjhx.xlsx'
+        : fileName.replace('120001', '120002'),
+      createdAt: mode === 'old-task' ? '2026-09-30 11:59:00' : '2026-09-30 12:00:02'
+    }];
+    if (mode === 'bad-id') rows[0].id = 'bad-id';
+    if (mode === 'multiple') rows.push({
+      id: '20260930120003681550426941423617',
+      fileName: otherFile.replace('120002', '120003'),
+      createdAt: '2026-09-30 12:00:03'
+    });
+    return {status:'found', rows};
   };
-  const result = await context.reconcile({attemptedAt: new Clock().toISOString(), targetMerchantNo: merchantNo, gate: {allowed: true, merchantNo}});
-  assert(visited.includes(1));
-  if (mode === 'bound') { assert.equal(result.status, 'accepted'); assert.equal(result.fileName, fileName); }
-  else assert.equal(result.status, 'unknown', mode);
-  if (['bound', 'multiple', 'duplicate', 'unbound'].includes(mode)) assert.equal(visited.at(-1), 2, 'must finish scanning all pages');
+  const baselineRows = mode === 'duplicate-baseline'
+    ? [{id:baselineId}, {id:baselineId}]
+    : [{id:baselineId}];
+  const result = await context.reconcile({
+    attemptedAt: new Clock().toISOString(),
+    targetMerchantNo: merchantNo,
+    gate: {allowed:true,merchantNo},
+    baselineRows
+  });
+  if (mode === 'accepted') {
+    assert.equal(result.status, 'accepted');
+    assert.equal(result.taskId, taskId);
+    assert.equal(result.fileName, fileName.replace('120001', '120002'));
+    assert.deepEqual(calls, ['snapshotExportTasks']);
+  } else {
+    assert.equal(result.status, 'unknown', mode);
+    if (['read-error', 'no-new'].includes(mode)) {
+      assert(now - new Date(2026, 8, 30, 12, 0, 1).getTime() >= 15000);
+    }
+    if (mode === 'duplicate-baseline') assert.equal(calls.length, 0);
+  }
 }
 
 async function monthly(mode) {
@@ -133,7 +152,7 @@ async function incompleteDownloads(mode) {
 }
 
 (async () => {
-  for (const mode of ['bound', 'unbound', 'multiple', 'duplicate', 'failed-page', 'stuck-page']) await reconcile(mode);
+  for (const mode of ['accepted', 'multiple', 'merchant-mismatch', 'bad-id', 'old-task', 'no-new', 'read-error', 'duplicate-baseline']) await reconcile(mode);
   for (const mode of ['normal', 'submit-timeout', 'response-timeout', 'reconcile-error', 'switch', 'missing-merchant', 'blocked', 'stop-query', 'stop-submit', 'stop-response', 'stop-reconcile']) await monthly(mode);
   for (const mode of ['blocked-page', 'stale-page', 'unknown-pagination']) await incompleteDownloads(mode);
   for (const names of [[fileName, null], [fileName, fileName]]) {
