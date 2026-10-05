@@ -22,15 +22,10 @@ async function check(trade, mode) {
     return trade ? {success:true,data:{list:[{id:'1',exportFileName:'one.xlsx'}],pages:2,total:2}}
       : {ok:true,json:async()=>({respCode:'000000',list:{content:[{export_id:'1',file_name:'one.xlsx'}],totalPages:2,totalElements:2}})};
   };
-  const component = {$options:{name:'table'},$axiosApi:{axiosPromisePara:async (data,url,config) => {
-    assert.equal(config.timeout,2000);
-    return request(config);
-  }}};
-  const table = new Element(); table.__vue__ = {$parent:component};
   const context = vm.createContext({Date:Clock,Element,AbortController,
     location:{hostname:'service.chinaums.com',pathname:trade?'/uisportalfront':'/uisportal/accountCheckDetailQry/toDetail',hash:'#/auditOfTrade2026'},
-    localStorage:{getItem:()=>null},getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}),
-    document:{querySelectorAll:selector=>selector==='.el-table'?[table]:[]},
+    localStorage:{getItem:()=>trade?'TEST_TOKEN':null},getComputedStyle:()=>({display:'block',visibility:'visible',opacity:'1'}),
+    document:{querySelectorAll:()=>[]},
     fetch:async(url,config)=>request(config),
     setTimeout:fn=>{timer=fn;return 1;},clearTimeout:()=>{cleared=true;}
   });
