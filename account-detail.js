@@ -49,15 +49,9 @@
     payload.set("pageNumber", String(pageNumber));
     return { payload, pageSize: 5 };
   };
-  const querySignature = (payload) => {
-    const copy = new URLSearchParams(payload);
-    copy.delete("pageNumber");
-    return copy.toString();
-  };
   const readAccountQuery = async (deadline) => {
     const first = buildQueryPayload(1);
     if (first.error) throw new Error(first.error);
-    const expectedSignature = querySignature(first.payload);
     const rows = [];
     let totalPages = null;
     let totalElements = null;
@@ -65,9 +59,7 @@
       if (Date.now() >= deadline) throw new Error("对账明细查询已超过截止时间。");
       const built = buildQueryPayload(pageNumber);
       if (built.error) throw new Error(built.error);
-      if (built.pageSize !== first.pageSize || querySignature(built.payload) !== expectedSignature) {
-        throw new Error("对账明细查询条件在分页读取过程中发生变化。");
-      }
+      if (built.pageSize !== first.pageSize) throw new Error("对账明细查询页大小发生变化。");
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.max(0, deadline - Date.now()));
       let response;
@@ -124,11 +116,7 @@
     if (totalElements > 0 && merchants.length !== 1) {
       throw new Error("对账明细查询结果没有唯一商户号；未申请导出。");
     }
-    return {
-      count: totalElements,
-      merchantNo: merchants[0] || null,
-      filterSignature: expectedSignature
-    };
+    return { count: totalElements, merchantNo: merchants[0] || null };
   };
 
   const buildExportPayload = () => {
@@ -214,7 +202,6 @@
           resultState: "set",
           count: null,
           merchantNo: null,
-          filterSignature: null,
           reason: null
         };
         return { status: "set", beginSettDate, endSettDate };
@@ -230,7 +217,7 @@
         try {
           const result = await readAccountQuery(args.operationDeadline ?? Date.now() + 60000);
           Object.assign(queryTracker, result.count === 0
-            ? { resultState: "no_data", count: 0, merchantNo: null, filterSignature: result.filterSignature, reason: null }
+            ? { resultState: "no_data", count: 0, merchantNo: null, reason: null }
             : { resultState: "ready", count: result.count, merchantNo: result.merchantNo,
               filterSignature: result.filterSignature, reason: null });
         } catch (error) {
@@ -283,9 +270,8 @@
         }
         if (verified.count <= 0 || verified.count !== queryTracker.count ||
           verified.merchantNo !== queryTracker.merchantNo ||
-          verified.merchantNo !== normalize(args.targetMerchantNo) ||
-          verified.filterSignature !== queryTracker.filterSignature) {
-          return { status: "blocked", reason: "提交前接口复核发现商户、查询条件或数据状态已变化；未申请导出。" };
+          verified.merchantNo !== normalize(args.targetMerchantNo)) {
+          return { status: "blocked", reason: "提交前接口复核发现商户或数据状态已变化；未申请导出。" };
         }
         const prepared = buildExportPayload();
         if (prepared.error) return { status: "blocked", reason: prepared.error };
