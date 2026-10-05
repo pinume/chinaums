@@ -9,7 +9,11 @@ if (mixed) tasks[1].fileName = tasks[1].fileName.replace("B1L3", "B06R");
 let page = 1, opened = false, nextCalls = 0, dataPage = 1, pendingReads = 0, delayedTimer = false;
 const clicked = [], completed = [], delays = [];
 (async()=>{
-  await CHINAUMS_DOWNLOAD_RUNNER.run({reportType:'trade-audit',merchantNo:'',onMerchantIdentified:async value=>assert.equal(value,'89813014812B1L3'),startedAt:new Date(2026,8,30,18,13,0,500).toISOString(),submittedMonths:tasks.map((t,i)=>({month:`2026-${String(i+1).padStart(2,'0')}`,submittedAt:new Date(2026,8,30,18,13,i,500).toISOString(),remoteFileName:t.fileName})),gate:{allowed:true,merchantNo:'89813014812B1L3'},checkpoint:async()=>{},sleep:async ms=>{delays.push(ms);now+=ms;if(ms===200 && !delayedTimer){now+=20000;delayedTimer=true;}},transition:async event=>{if(event.status==='DOWNLOAD_COMPLETED')completed.push(event.month);},invoke:async(op,args)=>{
+  await CHINAUMS_DOWNLOAD_RUNNER.run({reportType:'trade-audit',merchantNo:'',onMerchantIdentified:async value=>assert.equal(value,'89813014812B1L3'),startedAt:new Date(2026,8,30,18,13,0,500).toISOString(),submittedMonths:tasks.map((t,i)=>({month:`2026-${String(i+1).padStart(2,'0')}`,submittedAt:new Date(2026,8,30,18,13,i,500).toISOString(),remoteFileName:t.fileName,remoteTaskId:`task-${i+1}`})),gate:{allowed:true,merchantNo:'89813014812B1L3'},checkpoint:async()=>{},sleep:async ms=>{delays.push(ms);now+=ms;if(ms===200 && !delayedTimer){now+=20000;delayedTimer=true;}},transition:async event=>{if(event.status==='DOWNLOAD_COMPLETED')completed.push(event.month);},invoke:async(op,args)=>{
+    if(op==='snapshotExportTasks'){
+      assert.equal(args.taskIds.length,12);
+      return {status:'found',rows:tasks.map((t,i)=>({id:`task-${i+1}`,fileName:t.fileName,statusCode:'ready',exportStatus:'02',exportStatusDesc:'成功'}))};
+    }
     if(op==='openDownloadList'){opened=true;return{status:'clicked'};}
     if(op==='parseDownloadTasks'){if(pendingReads && --pendingReads===0)dataPage=page;return{status:opened?'found':'not_open',page,total:12,hasNext:page===1,rows:tasks.slice().reverse().slice((dataPage-1)*10,dataPage*10)};}
     if(op==='nextDownloadPage'){page++;nextCalls++;pendingReads=nextCalls===1?2:30;return{status:'clicked'};}
