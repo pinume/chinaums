@@ -1,0 +1,20 @@
+name: branch-check
+on:
+  push:
+    branches:
+      - fix/account-download-api-generation
+  pull_request:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node check.cjs
+      - run: |
+          git fetch origin main --depth=1
+          git diff --check origin/main HEAD
