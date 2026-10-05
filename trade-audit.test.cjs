@@ -1,54 +1,114 @@
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+
 class Element {
-  constructor(text = '', classes = []) { this.textContent = text; this.classList = { contains: name => classes.includes(name) }; }
   getClientRects() { return [1]; }
-  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  closest() { return null; }
   querySelectorAll() { return []; }
-  click() {}
+  querySelector() { return null; }
 }
-let opened = false, month = 9, picked = [], pending = 0, neverOpen = false, focused = false, background = false;
-const input = new Element(); input.value = ''; input.blur = () => { focused = false; }; input.focus = () => { if (!focused && !background) { pending = 3; picked = []; focused = true; } }; input.click = () => {}; input.dispatchEvent = event => {if(background && event.type === "focus") {pending=3;picked=[];}};
-const confirm = new Element('确定');
-confirm.click = () => { input.value = picked.map(day => `2026/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`).join(' ~ '); opened = false; };
-const panel = new Element();
-panel.querySelectorAll = selector => {
-  if (selector === '.laydate-set-ym') return [new Element(`2026年 ${month}月`)];
-  if (selector === '.laydate-prev-m' || selector === '.laydate-next-m') {
-    const arrow = new Element(); arrow.click = () => { month += selector.includes('prev') ? -1 : 1; }; return [arrow];
+const table = new Element();
+let mode = "paged";
+let token = "TEST_TOKEN";
+const calls = [];
+const merchantId = "merchant-id";
+const makeRows = (count, current) => Array.from({ length: count }, (_, index) => ({
+  id: `row-${current}-${index}`,
+  mchntId: mode === "mixed" && current === 1 && index === 0 ? "other-merchant" : merchantId,
+  transDate: mode === "bad-date" && current === 0 && index === 0 ? "20260831" : "20260915"
+}));
+const component = {
+  $options: { name: "table" },
+  $axiosApi: {
+    axiosPromisePara: async (payload, endpoint, options) => {
+      calls.push({ payload: JSON.parse(JSON.stringify(payload)), endpoint, options });
+      assert.equal(endpoint, "uis-tradein-server/portal/yjhx/v3/queryList");
+      if (mode === "api-error") return { success: false, code: "999999", message: "系统异常", data: null };
+      if (mode === "no-data") {
+        return { success: true, code: "000000", message: "成功",
+          data: { size: 10, current: 0, total: 0, pages: 0, list: [] } };
+      }
+      const current = payload.current;
+      const list = current === 0 ? makeRows(10, 0) : makeRows(8, 1);
+      return { success: true, code: "000000", message: "成功",
+        data: { size: 10, current, total: 18, pages: 2, list } };
+    }
   }
-  if (selector === '.layui-laydate-content td') return Array.from({length: new Date(2026, month, 0).getDate()}, (_, i) => {
-    const cell = new Element(String(i + 1), month > 9 ? ['laydate-disabled'] : []);
-    cell.click = () => picked.push(i + 1); return cell;
-  });
-  return [];
 };
-const calendar = new Element();
-calendar.querySelectorAll = selector => selector === '.layui-laydate-main' ? [panel] : selector === 'span.laydate-btns-confirm' ? [confirm] : [];
+table.__vue__ = { $parent: component };
+
 const context = vm.createContext({
-  Element, Event, location: {hostname: 'service.chinaums.com', pathname: '/uisportalfront/', hash: '#/auditOfTrade2026'},
-  getComputedStyle: () => ({display: 'block', visibility: 'visible', opacity: '1'}),
-  document: {querySelectorAll: selector => selector === 'input.deal-date' ? [input] : selector === '.layui-laydate' && opened ? [calendar] : []},
-  setTimeout: fn => { if (pending && !neverOpen && --pending === 0) opened = true; fn(); }, Date
+  Element,
+  Date,
+  AbortController,
+  localStorage: { getItem: (key) => { assert.equal(key, "userPortalVerifyToken"); return token; } },
+  location: { hostname: "service.chinaums.com", pathname: "/uisportalfront/", hash: "#/auditOfTrade2026" },
+  getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+  document: {
+    body: new Element(),
+    documentElement: new Element(),
+    querySelectorAll(selector) {
+      if (selector === ".el-table") return [table];
+      return [];
+    }
+  },
+  setTimeout,
+  clearTimeout
 });
-vm.runInContext(fs.readFileSync(__dirname + '/trade-audit.js', 'utf8'), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, "utf8"), context);
+
 (async () => {
   const adapter = context.__chinaumsTradeAuditAdapter;
-  for (let m = 1; m <= 9; m++) {
-    const end = new Date(2026, m, 0).getDate();
-    const result = await adapter('setDateRange', {start: `2026-${String(m).padStart(2, '0')}-01`, end: `2026-${String(m).padStart(2, '0')}-${end}`});
-    assert.equal(result.status, 'set', JSON.stringify(result));
-    assert.equal(input.value, `2026/${String(m).padStart(2, '0')}/01 ~ 2026/${String(m).padStart(2, '0')}/${end}`);
-  }
-  const disabled = await adapter('setDateRange', {start: '2026-10-01', end: '2026-10-31'});
-  assert.equal(disabled.status, 'failed');
-  assert.deepEqual(picked, []);
-  opened = false; neverOpen = true;
-  const missing = await adapter('setDateRange', {start: '2026-01-01', end: '2026-01-31'});
-  assert.equal(missing.status, 'failed'); assert.match(missing.reason, /3 秒/);
-  assert.deepEqual(picked, []);
-  neverOpen=false; background=true; pending=0;
-  assert.equal((await adapter('setDateRange',{start:'2026-02-01',end:'2026-02-28'})).status,'set');
-  console.log('PASS: January–September date ranges, month arrows, input readback and disabled future days');
-})().catch(error => { console.error(error); process.exitCode = 1; });
+  const inspection = await adapter("inspect");
+  assert.equal(inspection.status, "ready");
+  assert.equal(inspection.hasQuery, true, "query readiness comes from the page API, not a query button");
+
+  assert.equal((await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" })).status, "set");
+  assert.equal((await adapter("setDateRange", { start: "2026-02-30", end: "2026-03-01" })).status, "failed");
+  assert.equal((await adapter("setDateRange", { start: "2026-10-05", end: "2026-10-01" })).status, "failed");
+  await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" });
+
+  calls.length = 0;
+  assert.equal((await adapter("query", { operationDeadline: Date.now() + 10000 })).status, "clicked");
+  assert.equal(calls.length, 2, "all queryList pages must be read before merchant identity is accepted");
+  assert.deepEqual(calls.map((call) => call.payload), [
+    { merOrderId: "", transRef: "", status: [], beginTransDate: "20260901", endTransDate: "20260930", current: 0, size: 10 },
+    { merOrderId: "", transRef: "", status: [], beginTransDate: "20260901", endTransDate: "20260930", current: 1, size: 10 }
+  ]);
+  let state = await adapter("queryState", { targetMerchantId: merchantId });
+  assert.deepEqual(JSON.parse(JSON.stringify(state)), { status: "ready", count: 18, merchantId });
+  assert.equal((await adapter("queryState", { targetMerchantId: "other" })).status, "failed");
+
+  mode = "no-data";
+  await adapter("setDateRange", { start: "2026-10-01", end: "2026-10-05" });
+  assert.equal((await adapter("query", { operationDeadline: Date.now() + 10000 })).status, "clicked");
+  assert.deepEqual(JSON.parse(JSON.stringify(await adapter("queryState"))), { status: "no_data", count: 0 });
+
+  mode = "mixed";
+  await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" });
+  await adapter("query", { operationDeadline: Date.now() + 10000 });
+  state = await adapter("queryState");
+  assert.equal(state.status, "failed");
+  assert.match(state.reason, /唯一商户身份/);
+
+  mode = "bad-date";
+  await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" });
+  await adapter("query", { operationDeadline: Date.now() + 10000 });
+  assert.equal((await adapter("queryState")).status, "failed");
+
+  mode = "api-error";
+  await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" });
+  await adapter("query", { operationDeadline: Date.now() + 10000 });
+  assert.equal((await adapter("queryState")).status, "failed");
+
+  mode = "paged";
+  token = "";
+  await adapter("setDateRange", { start: "2026-09-01", end: "2026-09-30" });
+  const beforeMissingToken = calls.length;
+  const blocked = await adapter("query", { operationDeadline: Date.now() + 10000 });
+  assert.equal(blocked.status, "blocked");
+  assert.equal(calls.length, beforeMissingToken, "missing token must block before queryList side effects");
+
+  console.log("PASS: trade queryList reads every page, validates dates/identity, handles no-data, and needs no date/query UI controls");
+})().catch((error) => { console.error(error); process.exitCode = 1; });
