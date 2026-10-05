@@ -71,9 +71,11 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   vm.runInContext(fs.readFileSync(__dirname+'/download-runner.js','utf8'), context);
   await assert.rejects(context.CHINAUMS_DOWNLOAD_RUNNER.run({
     reportType:'trade-audit',merchantNo:'89813014812B1L3',gate:{},startedAt:new Date(now).toISOString(),
-    submittedMonths:[{month:'2026-09',remoteFileName:fileName,submittedAt:new Date(now).toISOString()}],
+    submittedMonths:[{month:'2026-09',remoteFileName:fileName,remoteTaskId:'task-1',submittedAt:new Date(now).toISOString()}],
     checkpoint:async()=>{},sleep:async()=>{throw new Error('must not wait for failed generation');},transition:async()=>{},
-    invoke:async op=>op==='openDownloadList'?{status:'already_open'}:adapter(op)
+    invoke:async op=>op==='snapshotExportTasks'
+      ? {status:'found',rows:[{id:'task-1',fileName,statusCode:'failed',exportStatus:'03',exportStatusDesc:'失败',errorMsg:'处理失败'}]}
+      : op==='openDownloadList'?{status:'already_open'}:adapter(op)
   }), /生成失败.*处理失败/);
   assert.equal(clicked,0);
   failed = false;
@@ -96,19 +98,20 @@ vm.runInContext(fs.readFileSync(__dirname+'/trade-audit.js','utf8'), context);
   assert.deepEqual(steps,['open']);
   loading = false; hidden = true; steps.length = 0;
   vm.runInContext(fs.readFileSync(__dirname+'/download-runner.js','utf8'), context);
-  ready = false; clicked = 0;
+  ready = true; clicked = 0;
   await context.CHINAUMS_DOWNLOAD_RUNNER.run({
     reportType:'trade-audit',merchantNo:args.targetMerchantNo,gate:args.gate,
     startedAt:new Date(2026,8,30,18,13,0).toISOString(),
-    submittedMonths:[{month:'2026-09',remoteFileName:fileName,submittedAt:new Date(2026,8,30,18,13,0).toISOString()}],
+    submittedMonths:[{month:'2026-09',remoteFileName:fileName,remoteTaskId:'task-1',submittedAt:new Date(2026,8,30,18,13,0).toISOString()}],
     checkpoint:async()=>{}, sleep:async ms=>{now+=ms;},transition:async()=>{},
     invoke:async(op, params)=>{
+      if(op==='snapshotExportTasks') return {status:'found',rows:[{id:'task-1',fileName,statusCode:'ready',exportStatus:'02',exportStatusDesc:'成功'}]};
       if(op==='downloadTask') { steps.push('download'); assert(ready); }
       if(op==='confirmDownload') { steps.push('complete'); return {status:'download_completed',downloadId:1}; }
       return adapter(op,params);
     }
   });
-  assert.deepEqual(steps,['open','close','close','open','download','complete','close']);
+  assert.deepEqual(steps,['open','download','complete','close','close']);
   assert.equal(clicked,1); assert(hidden);
   // 真实后台页面：组件已关闭，但离场动画使 DOM 仍有布局且 opacity 为 1。
   hidden = false;
