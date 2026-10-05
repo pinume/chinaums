@@ -270,10 +270,6 @@
         } catch (error) {
           return { status: "blocked", reason: `提交前接口复核失败：${error?.message || "查询身份无法确认"}` };
         }
-        const userPortalToken = localStorage.getItem("userPortalVerifyToken");
-        if (!userPortalToken) {
-          return { status: "blocked", reason: "页面登录令牌不可用，未申请导出。" };
-        }
         try {
           const response = await tradePost("applyExport", {
             merOrderId: "",
@@ -295,7 +291,7 @@
             ? `服务器返回 ${code || "无状态码"}：${message}`
             : "提交接口返回无法识别。" };
         } catch (error) {
-          return { status: "unknown", reason: error?.name === "TimeoutError"
+          return { status: "unknown", reason: ["AbortError", "TimeoutError"].includes(error?.name)
             ? "提交接口 12 秒内未返回。" : error?.message || "提交接口调用失败。" };
         }
       }
