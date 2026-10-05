@@ -44,7 +44,7 @@ async function check(mode) {
       if (operation === "snapshotExportTasks") {
         if (Array.isArray(args.taskIds)) {
           slotPolls += 1;
-          assert.deepEqual(args.taskIds, ["2026-01"]);
+          assert.deepEqual(Array.from(args.taskIds), ["2026-01"]);
           if (mode === "read-failure") throw new Error("temporary API failure");
           if (mode === "identity-mismatch") {
             return { status: "found", rows: [{
