@@ -52,6 +52,7 @@
     if (Number.isNaN(startedAtMs)) throw new Error("本轮开始时间无效，不能筛选暂存任务。");
     const generationDeadline = startedAtMs + 6 * 24 * 60 * 60 * 1000;
     let generationWaitStartedAt = null;
+    let readyApiTasks = [];
 
     if (["trade-audit", "account-detail"].includes(reportType)) {
       const expectedTasks = new Map(submittedMonths.map((month) => [String(month.remoteTaskId || ""), month]));
@@ -104,7 +105,10 @@
             throw new Error(`文件 ${failedTask.fileName} 生成失败（${failedTask.errorMsg || failedTask.exportStatusDesc || failedTask.exportStatus || "服务器返回失败状态"}）；停止等待，请核对服务器暂存任务。`);
           }
           const readyCount = matched.filter((row) => row.statusCode === "ready").length;
-          if (matched.length === expectedCount && readyCount === expectedCount) break;
+          if (matched.length === expectedCount && readyCount === expectedCount) {
+            readyApiTasks = matched;
+            break;
+          }
           await transition({ status: "WAITING_GENERATION", found: matched.length, ready: readyCount, expected: expectedCount,
             waitedMs: now() - generationWaitStartedAt, remaining: expectedCount - readyCount,
             listStatus: "api", parsedRows: snapshot.rows.length });
@@ -114,6 +118,43 @@
           await sleep(1000);
         }
       }
+    }
+
+    if (reportType === "account-detail") {
+      const readyById = new Map(readyApiTasks.map((row) => [String(row.id || ""), row]));
+      const orderedMonths = [...submittedMonths].sort((left, right) => left.submittedAt.localeCompare(right.submittedAt));
+      const downloaded = new Set(submittedMonths.map((month) => month.downloadedFileName).filter(Boolean));
+      const associatedTasks = orderedMonths.map((month, index) => ({
+        ...readyById.get(String(month.remoteTaskId || "")),
+        month: month.month || null,
+        submitOrder: index + 1
+      }));
+      for (const task of associatedTasks) {
+        if (downloaded.has(task.fileName)) continue;
+        await checkpoint();
+        const requestedAt = new Date().toISOString();
+        const requested = await invoke("downloadTaskDirect", {
+          taskId: task.id,
+          fileName: task.fileName,
+          gate,
+          targetMerchantNo: merchantNo
+        });
+        if (requested?.status !== "download_requested") {
+          throw new Error(`任务 ${task.fileName} 未通过直接下载门禁（${requested?.reason || requested?.status || "unknown"}）；停止后续下载。`);
+        }
+        await transition({ status: "DOWNLOAD_REQUESTED", fileName: task.fileName, month: task.month, submitOrder: task.submitOrder });
+        const completed = await invoke("confirmDownload", { fileName: task.fileName, requestedAt });
+        if (completed?.status !== "download_completed") {
+          throw new Error(`文件 ${task.fileName} 的下载完成状态无法确认；停止后续下载。`);
+        }
+        downloaded.add(task.fileName);
+        await transition({ status: "DOWNLOAD_COMPLETED", fileName: task.fileName, month: task.month, downloadId: completed.downloadId });
+      }
+      if (downloaded.size !== expectedCount) {
+        throw new Error("对账明细直接下载未覆盖全部本轮任务；已停止后续操作。");
+      }
+      await transition({ status: "DOWNLOAD_REQUESTS_SENT", count: associatedTasks.length });
+      return associatedTasks;
     }
 
     await transition({ status: "OPENING_DOWNLOAD_LIST" });
