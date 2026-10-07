@@ -15,61 +15,68 @@ const mixed = process.argv.includes("mixed");
 if (mixed) tasks[1].fileName = tasks[1].fileName.replace(merchantNo, "89813014812B06R");
 
 async function checkRunner() {
-  const requested = [];
-  const completed = [];
-  const calls = [];
-  const result = globalThis.CHINAUMS_DOWNLOAD_RUNNER.run({
-    reportType: "trade-audit",
-    merchantNo: "",
-    onMerchantIdentified: async (value) => assert.equal(value, merchantNo),
-    startedAt: new Date(2026, 8, 30, 18, 13, 0, 500).toISOString(),
-    submittedMonths: tasks.map((task, index) => ({
-      month: `2026-${String(index + 1).padStart(2, "0")}`,
-      submittedAt: new Date(2026, 8, 30, 18, 13, index, 500).toISOString(),
-      remoteFileName: task.fileName,
-      remoteTaskId: task.id
-    })),
-    gate: { allowed: true, merchantNo },
-    checkpoint: async () => {},
-    sleep: async () => {},
-    transition: async (event) => {
-      if (event.status === "DOWNLOAD_COMPLETED") completed.push(event.fileName);
-    },
-    invoke: async (operation, args = {}) => {
-      calls.push(operation);
-      if (operation === "snapshotExportTasks") {
-        assert.equal(args.taskIds.length, 12);
-        return { status: "found", rows: tasks };
+  const originalDateNow = Date.now;
+  const now = new Date(2026, 8, 30, 18, 13, 0, 500).getTime();
+  Date.now = () => now;
+  try {
+    const requested = [];
+    const completed = [];
+    const calls = [];
+    const result = globalThis.CHINAUMS_DOWNLOAD_RUNNER.run({
+      reportType: "trade-audit",
+      merchantNo: "",
+      onMerchantIdentified: async (value) => assert.equal(value, merchantNo),
+      startedAt: new Date(now).toISOString(),
+      submittedMonths: tasks.map((task, index) => ({
+        month: `2026-${String(index + 1).padStart(2, "0")}`,
+        submittedAt: new Date(2026, 8, 30, 18, 13, index, 500).toISOString(),
+        remoteFileName: task.fileName,
+        remoteTaskId: task.id
+      })),
+      gate: { allowed: true, merchantNo },
+      checkpoint: async () => {},
+      sleep: async () => {},
+      transition: async (event) => {
+        if (event.status === "DOWNLOAD_COMPLETED") completed.push(event.fileName);
+      },
+      invoke: async (operation, args = {}) => {
+        calls.push(operation);
+        if (operation === "snapshotExportTasks") {
+          assert.equal(args.taskIds.length, 12);
+          return { status: "found", rows: tasks };
+        }
+        if (operation === "downloadTaskDirect") {
+          assert.equal(completed.length, requested.length, "downloads must be confirmed sequentially");
+          const task = tasks[requested.length];
+          assert.equal(args.taskId, task.id);
+          assert.equal(args.fileName, task.fileName);
+          assert.equal(args.targetMerchantNo, merchantNo);
+          requested.push(args.fileName);
+          return { status: "download_requested", downloadId: requested.length };
+        }
+        if (operation === "confirmDownload") {
+          assert.equal(args.fileName, requested.at(-1));
+          assert.equal(args.downloadId, requested.length);
+          return { status: "download_completed", downloadId: requested.length };
+        }
+        throw new Error(`Unexpected operation: ${operation}`);
       }
-      if (operation === "downloadTaskDirect") {
-        assert.equal(completed.length, requested.length, "downloads must be confirmed sequentially");
-        const task = tasks[requested.length];
-        assert.equal(args.taskId, task.id);
-        assert.equal(args.fileName, task.fileName);
-        assert.equal(args.targetMerchantNo, merchantNo);
-        requested.push(args.fileName);
-        return { status: "download_requested", downloadId: requested.length };
-      }
-      if (operation === "confirmDownload") {
-        assert.equal(args.fileName, requested.at(-1));
-        assert.equal(args.downloadId, requested.length);
-        return { status: "download_completed", downloadId: requested.length };
-      }
-      throw new Error(`Unexpected operation: ${operation}`);
-    }
-  });
+    });
 
-  if (mixed) {
-    await assert.rejects(result, /多个商户/);
-    assert.equal(requested.length, 0);
-    return;
-  }
-  const rows = await result;
-  assert.equal(rows.length, 12);
-  assert.deepEqual(requested, tasks.map((task) => task.fileName));
-  assert.deepEqual(completed, requested);
-  for (const operation of ["openDownloadList", "parseDownloadTasks", "downloadTask", "closeDownloadList"]) {
-    assert(!calls.includes(operation), `trade direct download must not call ${operation}`);
+    if (mixed) {
+      await assert.rejects(result, /多个商户/);
+      assert.equal(requested.length, 0);
+      return;
+    }
+    const rows = await result;
+    assert.equal(rows.length, 12);
+    assert.deepEqual(requested, tasks.map((task) => task.fileName));
+    assert.deepEqual(completed, requested);
+    for (const operation of ["openDownloadList", "parseDownloadTasks", "downloadTask", "closeDownloadList"]) {
+      assert(!calls.includes(operation), `trade direct download must not call ${operation}`);
+    }
+  } finally {
+    Date.now = originalDateNow;
   }
 }
 

@@ -16,6 +16,7 @@ const elements = {
   resume: document.querySelector("#export-resume"),
   stop: document.querySelector("#export-stop"),
   close: document.querySelector("#export-close"),
+  copyLog: document.querySelector("#export-copy-log"),
   result: document.querySelector("#export-result"),
   resultTitle: document.querySelector("#export-result-title"),
   resultMessage: document.querySelector("#export-result-message"),
@@ -28,6 +29,8 @@ let stopRequested = false;
 let lastResultStatus = null;
 let pausedAt = null;
 let pausedDuration = 0;
+let lastWaitingKey = null;
+let lastWaitingLogTime = 0;
 // Flow waits exclude pauses; adapter requests and server retention keep real deadlines.
 const activeNow = () => (pausedAt ?? Date.now()) - pausedDuration;
 const finishPause = () => {
@@ -158,21 +161,35 @@ const transition = async (event) => {
   }
   const messages = {
     QUERYING: `${month}：正在查询并读取全部分页。`,
-    QUERY_READY: `${month}：已完成查询分页与商户核对。`,
+    QUERY_READY: typeof event.count === "number"
+      ? `${month}：查询完成，共 ${event.count} 笔交易，商户核对通过。`
+      : `${month}：已完成查询分页与商户核对。`,
     SUBMITTING: `${month}：查询完成，正在申请 XLSX。`,
     WAITING_FOR_SLOT: event.pending === undefined
       ? `${month}：服务器限流（第 ${event.attempt} 次），最多等待 ${Math.ceil(event.retryInMs / 1000)} 秒${reportType === "account-detail" ? "；通过暂存接口检查本轮任务进度后重试" : "，稍后重试当前月"}。`
-      : `${month}：等待申请名额，暂存接口显示本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成；不打开下载暂存列表。`,
+      : `${month}：等待申请名额，暂存接口显示本轮 ${event.pending} 个文件处理中、${event.generated} 个已生成。`,
     NO_DATA: `${month}：明确返回无数据，跳过空文件。`,
     SUBMITTED: `${month}：申请已被服务器接受。`,
     WAITING_GENERATION: event.listStatus === "api"
-      ? `暂存接口已匹配本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已确认生成成功；继续通过接口检查，不打开下载暂存列表。`
+      ? `暂存接口已匹配本轮 ${event.found ?? 0} / ${event.expected ?? 0} 个任务，${event.ready ?? 0} 个已确认生成成功。`
       : `暂存接口暂未确认本轮文件状态（${event.listStatus || "unknown"}）；稍后通过接口重新读取。`,
     DOWNLOAD_REQUESTED: `${month || "本轮任务"}：已校验任务并通过 Chrome 请求下载。`,
     DOWNLOAD_COMPLETED: `${month || "本轮任务"}：Chrome 已确认文件下载完成，立即继续下载已生成文件。`,
     DOWNLOAD_REQUESTS_SENT: "本轮所有文件均已由 Chrome 确认下载完成。"
   };
-  if (messages[status]) appendLog(messages[status]);
+  let shouldLog = Boolean(messages[status]);
+  if (status === "WAITING_GENERATION") {
+    const readyKey = `${event.found ?? 0}-${event.ready ?? 0}-${event.expected ?? 0}-${event.listStatus || ""}`;
+    const now = Date.now();
+    if (lastWaitingKey !== readyKey || (now - lastWaitingLogTime) >= 60000) {
+      lastWaitingKey = readyKey;
+      lastWaitingLogTime = now;
+      shouldLog = true;
+    } else {
+      shouldLog = false;
+    }
+  }
+  if (shouldLog && messages[status]) appendLog(messages[status]);
   if (status === "WAITING_GENERATION") {
     const seconds = Math.floor((event.waitedMs || 0) / 1000);
     state.stage = event.listStatus === "api"
@@ -316,14 +333,7 @@ const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => 
   })(), Math.max(0, operationDeadline - Date.now()), operation);
 };
 
-const parsePortalTimestamp = (value) => {
-  const match = String(value || "").match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})/);
-  if (!match) return Number.NaN;
-  return new Date(
-    Number(match[1]), Number(match[2]) - 1, Number(match[3]),
-    Number(match[4]), Number(match[5]), Number(match[6])
-  ).getTime();
-};
+const parsePortalTimestamp = (value) => Date.parse(String(value || "").replace(/-/g, "/"));
 
 const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMerchantNo, gate, baselineRows = [] }) => {
   const merchantNo = normalize(targetMerchantNo);
@@ -390,7 +400,7 @@ const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMercha
 const run = async () => {
   if (!["account-detail", "trade-audit"].includes(reportType) || !Number.isInteger(tabId) || tabId <= 0 || !SITE_CONFIG) throw new Error("导出参数无效。");
   if (reportType === "trade-audit" && new Date().getFullYear() !== 2026) {
-    throw new Error("以旧换新采集当前仅适配 2026 页面。");
+    throw new Error("已上传明细采集当前仅适配 2026 页面。");
   }
   const months = globalThis.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths();
   const monthKeys = months.map((month) => month.key);
@@ -456,7 +466,7 @@ const run = async () => {
   state.businessGate = { allowed: false, merchantNo: null, source: "awaiting-query-result" };
   elements.gate.textContent = "待查询后核对";
   elements.gate.className = "";
-  appendLog(`本轮报表：${reportType === "trade-audit" ? "以旧换新" : "对账明细"}。`);
+  appendLog(`本轮报表：${reportType === "trade-audit" ? "已上传明细" : "交易明细"}。`);
   appendLog("当前会话已登录。将沿用当前商户，从今年 1 月开始逐月查询；首个有数据的月份会识别商户号。");
   if (prior?.runId) appendLog(`上次运行（${prior.runId}）已留档；本轮从 ${monthKeys[0]} 重新开始，不会漏掉月份。`);
   await saveState();
@@ -511,7 +521,7 @@ const run = async () => {
   state.status = "COMPLETED";
   state.stage = submittedMonths.length ? "本轮文件已完成下载" : "本轮没有需要下载的文件";
   appendLog(submittedMonths.length
-    ? `导出流程结束。Chrome 已确认本轮所有文件下载完成；${reportType === "trade-audit" ? "以旧换新" : "对账明细"}最终下载未打开下载暂存列表。`
+    ? `导出流程结束。Chrome 已确认本轮所有文件下载完成；${reportType === "trade-audit" ? "已上传明细" : "交易明细"}最终下载未打开下载暂存列表。`
     : "导出流程结束。本轮月份均无数据，没有提交导出申请。");
   renderState();
   await saveState();
@@ -547,6 +557,26 @@ elements.stop.addEventListener("click", () => {
 });
 
 elements.close.addEventListener("click", () => window.close());
+
+if (elements.copyLog) {
+  elements.copyLog.addEventListener("click", async () => {
+    try {
+      const items = Array.from(elements.log?.querySelectorAll("li") || []);
+      const text = items.length
+        ? items.map((li) => li.textContent.trim()).filter(Boolean).join("\n")
+        : (state?.logs || []).join("\n");
+      if (!text) return;
+      await navigator.clipboard.writeText(text);
+      const originalText = elements.copyLog.textContent;
+      elements.copyLog.textContent = "已复制 ✓";
+      setTimeout(() => {
+        if (elements.copyLog) elements.copyLog.textContent = originalText;
+      }, 2000);
+    } catch (err) {
+      console.error("复制日志失败", err);
+    }
+  });
+}
 
 run().catch(async (error) => {
   const stopped = error?.message === "STOPPED_BY_USER";

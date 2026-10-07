@@ -4,13 +4,20 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>报表导出 | 银联商务助手</title>
+    <link rel="icon" href="favicon.ico">
     <link rel="stylesheet" href="styles.css">
   </head>
-  <body class="details-page prepare-page">
+  <body class="details-page">
     <header class="details-header">
-      <a class="back-link" href="popup.html">银联商务助手</a>
-      <h1>报表导出</h1>
-      <p id="export-target" class="muted"></p>
+      <div class="header-inner">
+        <div class="header-left">
+          <img class="site-logo-large" src="logo.png" alt="银联商务">
+          <div class="header-divider"></div>
+          <h1>报表导出控制台</h1>
+          <span id="export-target" class="target-badge"></span>
+        </div>
+        <a class="back-link" href="popup.html">← 返回插件</a>
+      </div>
     </header>
 
     <main class="prepare-content">
@@ -18,26 +25,36 @@
         <h2 id="export-result-title"></h2>
         <p id="export-result-message"></p>
       </section>
+
       <section class="overview-card">
-        <div class="detail-row"><span class="detail-label">运行状态</span><strong id="export-status">等待启动</strong></div>
-        <div class="detail-row"><span class="detail-label">当前步骤</span><span id="export-stage">检查当前登录会话</span></div>
-        <div class="detail-row"><span class="detail-label">当前月份</span><span id="export-month">—</span></div>
-        <div class="detail-row"><span class="detail-label">月份进度</span><span id="export-progress">0 / 0</span></div>
-        <div class="detail-row"><span class="detail-label">下载进度</span><span id="export-download-progress">所有月份申请完成后自动开始</span></div>
-        <div class="detail-row"><span class="detail-label">商户号核对</span><strong id="export-gate">待查询后核对</strong></div>
-        <div class="details-actions">
-          <button id="export-pause" class="secondary-button" type="button" disabled>暂停</button>
-          <button id="export-resume" class="secondary-button" type="button" disabled>继续</button>
-          <button id="export-stop" class="secondary-button" type="button" disabled>停止</button>
-          <button id="export-close" class="secondary-button" type="button" disabled>关闭此页</button>
+        <div class="card-header card-header-flex">
+          <h2>运行概览</h2>
+          <div class="details-actions">
+            <button id="export-pause" class="secondary-button" type="button" disabled>暂停</button>
+            <button id="export-resume" class="secondary-button" type="button" disabled>继续</button>
+            <button id="export-stop" class="danger-button" type="button" disabled>停止</button>
+            <button id="export-close" class="secondary-button" type="button" disabled>关闭此页</button>
+          </div>
+        </div>
+        <div class="overview-grid">
+          <div class="detail-row"><span class="detail-label">运行状态</span><strong id="export-status">等待启动</strong></div>
+          <div class="detail-row"><span class="detail-label">当前步骤</span><span id="export-stage">检查当前登录会话</span></div>
+          <div class="detail-row"><span class="detail-label">当前月份</span><span id="export-month">—</span></div>
+          <div class="detail-row"><span class="detail-label">商户号核对</span><strong id="export-gate">待查询后核对</strong></div>
+          <div class="detail-row"><span class="detail-label">月份进度</span><span id="export-progress">0 / 0</span></div>
+          <div class="detail-row"><span class="detail-label">下载进度</span><span id="export-download-progress">所有月份申请完成后自动开始</span></div>
         </div>
       </section>
 
-      <section class="overview-card prepare-log-card">
-        <h2>执行记录</h2>
+      <section class="overview-card">
+        <div class="card-header card-header-flex">
+          <h2>执行记录</h2>
+          <button id="export-copy-log" class="secondary-button copy-button" type="button">复制日志</button>
+        </div>
         <ol id="export-log" class="prepare-log"></ol>
       </section>
-      <p class="privacy-note">沿用当前登录会话，不选择或切换商户。对账明细从查询结果识别商户号；以旧换新从本轮新申请的文件名识别商户号。按年初至今逐月查询；对账明细固定普通交易，不读取网页筛选条件。全部文件生成后连续下载，每份由 Chrome 确认完成后再下载下一份。</p>
+
+      <p class="privacy-note">沿用当前登录会话，不选择或切换商户。交易明细从查询结果识别商户号；已上传明细从本轮新申请的文件名识别商户号。按年初至今逐月查询；交易明细固定普通交易，不读取网页筛选条件。全部文件生成后连续下载，每份由 Chrome 确认完成后再下载下一份。</p>
     </main>
     <script src="site-config.js"></script>
     <script src="auth.js"></script>

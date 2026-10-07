@@ -10,15 +10,6 @@
     { text: "对账明细查询", pattern: /^accountCheckDetailQry\/toDetail(?:[?#]|$)/i },
     { text: "POS业务申办", pattern: /^business\/businessBidding(?:[?#]|$)/i }
   ];
-  const NOISE_CLASSES = [
-    "swiper-pagination",
-    "swiper-pagination-bullet",
-    "slick-dot",
-    "slick-dots",
-    "carousel-indicator",
-    "carousel-control"
-  ];
-
   const cleanText = (value, limit = 240) =>
     String(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
 
@@ -26,13 +17,6 @@
     /([?&](?:token|ticket|secret|password|session|auth|code|merchantId|merId)=)[^&'"\s)]+/gi,
     "$1[已隐藏]"
   );
-
-  const describeHandler = (rawHandler) => {
-    if (!rawHandler) return "";
-    const handler = String(rawHandler);
-    const call = handler.match(/(?:^|[;{}\s])([\w$]+(?:\.[\w$]+)*)\s*\(/);
-    return call ? `${call[1]}(…)` : "已设置（代码未采集）";
-  };
 
   const dedupeBy = (items, keyOf) => {
     const seen = new Set();
@@ -101,15 +85,7 @@
     }
     return picked.slice(0, 4).map(({ element, clickable }) => ({
       element,
-      data: {
-        found: true,
-        text: label,
-        tag: element.tagName.toLowerCase(),
-        selector: selectorFor(element),
-        clickable,
-        className: cleanText(typeof element.className === "string" ? element.className : "", 160),
-        onclick: describeHandler(element.getAttribute("onclick"))
-      }
+      data: { found: true, text: label, clickable }
     }));
   };
 
@@ -135,52 +111,35 @@
   const detectMerchant = () => {
     const merchantControls = findMerchantLabelControls("我的商户");
     const switchControls = findMerchantLabelControls("切换商户");
-    const semanticNodes = [];
-    const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
-    let textNode;
-    let examinedNodes = 0;
-    while ((textNode = walker.nextNode()) && examinedNodes < 12000) {
-      examinedNodes += 1;
-      const nodeText = textNode.nodeValue || "";
-      const label = /当前商户/.test(nodeText) ? "当前商户" : /商户名称/.test(nodeText) ? "商户名称" : null;
-      if (!label) continue;
-      const parent = textNode.parentElement;
-      if (parent && isVisible(parent)) semanticNodes.push({ element: parent, label });
-    }
-    const uniqueSemanticNodes = semanticNodes.filter((item, index, all) =>
-      all.findIndex((other) => other.element === item.element && other.label === item.label) === index
-    )
-      .sort((left, right) => merchantLabelText(left.element).length - merchantLabelText(right.element).length)
-      .slice(0, 80);
-
+    const headerUserInfo = document.querySelector(".usersImg .userInfo, header .userInfo");
     let current = null;
     let source = null;
     let confidence = "low";
-    for (const semanticNode of uniqueSemanticNodes) {
-      let candidate = semanticNode.element;
-      for (let depth = 0; candidate && depth < 4; depth += 1, candidate = candidate.parentElement) {
-        const text = String(candidate.innerText || candidate.textContent || "");
-        if (text.length > 500) continue;
-        if (semanticNode.label === "商户名称" && !/(当前商户|我的商户|切换商户)/.test(text)) continue;
-        const value = extractCurrentMerchant(candidate, semanticNode.label);
-        if (value) {
-          current = cleanText(value, 180);
-          source = "merchant-panel";
-          confidence = semanticNode.label === "当前商户" ? "high" : "medium";
-          break;
-        }
-      }
-      if (current) break;
-    }
 
-    const headerUserInfo = document.querySelector(".usersImg .userInfo, header .userInfo");
-    if (!current && headerUserInfo) {
+    if (headerUserInfo) {
       const value = extractCurrentMerchant(headerUserInfo, "当前商户") ||
         extractCurrentMerchant(headerUserInfo, "商户名称");
       if (value) {
         current = cleanText(value, 180);
         source = "merchant-panel";
         confidence = "high";
+      }
+    }
+
+    if (!current) {
+      const candidates = [...document.querySelectorAll("header, nav, .header, .top-bar, .user-info, .account-info, div, span")]
+        .filter(isVisible)
+        .slice(0, 60);
+      for (const el of candidates) {
+        const text = el.innerText || "";
+        if (text.length > 300) continue;
+        const val = extractCurrentMerchant(el, "当前商户") || extractCurrentMerchant(el, "商户名称");
+        if (val) {
+          current = cleanText(val, 180);
+          source = "merchant-panel";
+          confidence = "medium";
+          break;
+        }
       }
     }
 
@@ -201,31 +160,6 @@
       }
     }
 
-    if (!current) {
-      const attributeNames = ["data-current-merchant", "data-merchant-name", "data-merchant"];
-      const nearby = merchantControls
-        .map((control) => control.element);
-      for (const control of nearby) {
-        let candidate = control;
-        for (let depth = 0; candidate && depth < 4; depth += 1, candidate = candidate.parentElement) {
-          for (const attribute of attributeNames) {
-            const value = candidate.getAttribute(attribute);
-            if (value && cleanText(value, 180)) {
-              current = cleanText(value, 180);
-              source = "data-attribute";
-              confidence = "medium";
-              break;
-            }
-          }
-          if (current) break;
-        }
-        if (current) break;
-      }
-    }
-
-    const currentLabelVisible = uniqueSemanticNodes.some((item) => item.label === "当前商户") ||
-      Boolean(headerUserInfo && /当前商户/.test(headerUserInfo.innerText || headerUserInfo.textContent || ""));
-    const merchantNameLabelVisible = uniqueSemanticNodes.some((item) => item.label === "商户名称");
     return {
       target: SITE_CONFIG.targetMerchant,
       current,
@@ -239,9 +173,9 @@
       merchantControl: merchantControls[0]?.data || { found: false },
       switchControl: switchControls[0]?.data || { found: false },
       merchantPanel: {
-        visible: currentLabelVisible || (merchantNameLabelVisible && switchControls.length > 0),
-        currentMerchantLabelVisible: currentLabelVisible,
-        merchantNameLabelVisible,
+        visible: Boolean(current || switchControls.length > 0),
+        currentMerchantLabelVisible: Boolean(current),
+        merchantNameLabelVisible: Boolean(current),
         switchAvailable: switchControls.length > 0
       }
     };
@@ -273,35 +207,7 @@
     limit
   );
 
-  const selectorFor = (element) => {
-    const tag = element.tagName.toLowerCase();
-    if (element.id) return tag + "#" + CSS.escape(element.id);
-    const classes = typeof element.className === "string"
-      ? element.className.trim().split(/\s+/).filter(Boolean).slice(0, 2)
-      : [];
-    if (classes.length) return tag + "." + classes.map((name) => CSS.escape(name)).join(".");
-    const role = element.getAttribute("role");
-  };
-
-  const collectVisibleText = () => {
-    if (!document.body) return "";
-    const ignored = "table,script,style,noscript,svg,canvas,iframe";
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    const lines = [];
-    let characterCount = 0;
-    let node;
-    while ((node = walker.nextNode())) {
-      const parent = node.parentElement;
-      if (!parent || parent.closest(ignored) || !isVisible(parent)) continue;
-      const text = cleanText(node.nodeValue, 500);
-      if (text && lines[lines.length - 1] !== text) {
-        lines.push(text);
-        characterCount += text.length + 1;
-      }
-      if (characterCount >= 7000) break;
-    }
-    return lines.join("\n").slice(0, 7000);
-  };
+  const collectVisibleText = () => cleanText(document.body?.innerText || "", 7000);
 
   const resolveMainNavigation = () => {
     const items = [...document.querySelectorAll("a[href]")]
@@ -349,12 +255,6 @@
     return dedupeBy(items, (item) => item.text + "|" + item.target);
   };
 
-  const isNoiseControl = (element, text) => {
-    if (/^go to slide\s+\d+$/i.test(text)) return true;
-    const className = typeof element.className === "string" ? element.className.toLowerCase() : "";
-    return NOISE_CLASSES.some((name) => className.includes(name));
-  };
-
   const scanCurrentFrame = () => {
     const isTopFrame = window.top === window;
     const path = window.location.pathname;
@@ -370,7 +270,6 @@
       'button,input[type="button"],input[type="submit"],input[type="reset"],[role="button"]'
     )]
       .filter(isVisible)
-      .filter((element) => !isNoiseControl(element, readableName(element)))
       .map((element) => ({
         text: readableName(element),
         type: element.getAttribute("type") || element.tagName.toLowerCase(),

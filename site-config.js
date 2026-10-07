@@ -12,20 +12,20 @@ globalThis.CHINAUMS_SITE_CONFIG = Object.freeze({
     { path: "/uisportal/product/productView", label: "产品中心" }
   ]),
   pageRoutes: Object.freeze([
-    { category: "首页", exact: "/uisportal/index_r" },
-    { category: "账务中心", prefix: "/uisportal/accountingCenter" },
-    { category: "营销中心", prefix: "/uisportal/marketingCoupon" },
-    { category: "数据中心", prefix: "/uisportal/transactionData" },
-    { category: "服务市场", prefix: "/uisportal/serviceMarket" },
-    { category: "产品中心", prefix: "/uisportal/product" },
-    { category: "商户切换", exact: "/uisportal/merInfoUser/userMerView" },
-    { category: "员工管理", prefix: "/uisportal/user/newUser" },
-    { category: "商户信息", prefix: "/uisportal/merInfoUser/businessCenter" },
-    { category: "员工管理", prefix: "/uisportal/merInfoUser/myStaff" },
-    { category: "实时交易查询", prefix: "/uisportal/qryCRealTimeTrans/toCRealTimeTrans" },
-    { category: "对账明细查询", prefix: "/uisportal/accountCheckDetailQry/toDetail" },
-    { category: "POS业务申办", prefix: "/uisportal/business/businessBidding" },
-    { category: "交易审计", exact: "/uisportal/rt2" },
-    { category: "交易审计", prefix: "/uisportalfront" }
+    { exact: "/uisportal/index_r" },
+    { prefix: "/uisportal/accountingCenter" },
+    { prefix: "/uisportal/marketingCoupon" },
+    { prefix: "/uisportal/transactionData" },
+    { prefix: "/uisportal/serviceMarket" },
+    { prefix: "/uisportal/product" },
+    { exact: "/uisportal/merInfoUser/userMerView" },
+    { prefix: "/uisportal/user/newUser" },
+    { prefix: "/uisportal/merInfoUser/businessCenter" },
+    { prefix: "/uisportal/merInfoUser/myStaff" },
+    { prefix: "/uisportal/qryCRealTimeTrans/toCRealTimeTrans" },
+    { prefix: "/uisportal/accountCheckDetailQry/toDetail" },
+    { prefix: "/uisportal/business/businessBidding" },
+    { exact: "/uisportal/rt2" },
+    { prefix: "/uisportalfront" }
   ])
 });

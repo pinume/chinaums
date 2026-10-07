@@ -4,24 +4,36 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>银联商务助手</title>
+    <link rel="icon" href="favicon.ico">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body class="popup-page">
     <header class="topbar">
-      <div class="brand-mark" aria-hidden="true">银</div>
-      <div>
-        <h1>Fuck狗娘养的国补数据</h1>
+      <img class="site-logo" src="logo.png" alt="银联商务">
+      <div class="topbar-divider"></div>
+      <div class="topbar-content">
+        <h1>报表助手</h1>
+        <p class="subtitle">商户统一服务平台</p>
       </div>
     </header>
 
-    <main>
+    <main class="popup-main">
       <section class="status-card" aria-live="polite">
-        <div class="status-line"><span>网站</span><strong id="site-status">检测中…</strong></div>
+        <div class="status-line"><span>网站状态</span><strong id="site-status">检测中…</strong></div>
         <div class="status-line"><span>登录状态</span><strong id="login-status">检测中…</strong></div>
         <div class="status-line"><span>当前商户</span><strong id="merchant-name">检测中…</strong></div>
-        <button id="start-export-test-button" class="primary-button merchant-action" type="button" disabled>开始对账明细（1月至本月）</button>
-        <button id="start-trade-export-button" class="primary-button merchant-action" type="button" disabled>开始以旧换新2026（1月至本月）</button>
-        <p class="muted account-warning">沿用当前登录会话，自动逐月申请并下载；请保留网站和导出页面，导出范围为当前商户。</p>
+      </section>
+
+      <section class="actions-group">
+        <button id="start-export-test-button" class="primary-button merchant-action" type="button" disabled>
+          交易明细导出
+        </button>
+        <button id="start-trade-export-button" class="primary-button merchant-action secondary-action" type="button" disabled>
+          已上传明细导出
+        </button>
+        <button id="open-portal-button" class="secondary-button merchant-action" type="button" hidden>
+          打开银联商务门户
+        </button>
       </section>
 
       <p id="error-message" class="error-message" role="alert"></p>

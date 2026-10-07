@@ -1,4 +1,3 @@
-const STORAGE_KEY = "latestSnapshot";
 const SITE_CONFIG = globalThis.CHINAUMS_SITE_CONFIG;
 if (!SITE_CONFIG) throw new Error("银联商务站点配置未加载。");
 const TARGET_HOST = SITE_CONFIG.host;
@@ -10,6 +9,7 @@ const elements = {
   merchant: document.querySelector("#merchant-name"),
   startExportTestButton: document.querySelector("#start-export-test-button"),
   startTradeExportButton: document.querySelector("#start-trade-export-button"),
+  openPortalButton: document.querySelector("#open-portal-button"),
   error: document.querySelector("#error-message")
 };
 
@@ -53,13 +53,40 @@ const attachFrame = (items, frame) => (items || []).map((item) => ({
   frameUrl: frame.url
 }));
 
+const findTargetTab = async () => {
+  if (!chrome?.tabs?.query) return { tab: null, isCrossTab: false };
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab?.id && activeTab.url && routeForUrl(activeTab.url).kind === "portal_page") {
+      return { tab: activeTab, isCrossTab: false };
+    }
+  } catch {}
+  try {
+    const portalTabs = await chrome.tabs.query({ url: "https://service.chinaums.com/*" });
+    const match = portalTabs.find((t) => t?.id && t.url && routeForUrl(t.url).kind === "portal_page");
+    if (match) return { tab: match, isCrossTab: true };
+    const anyChinaums = portalTabs.find((t) => t?.id && t.url && routeForUrl(t.url).recognized);
+    if (anyChinaums) return { tab: anyChinaums, isCrossTab: true };
+  } catch {}
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab?.id && activeTab.url && routeForUrl(activeTab.url).recognized) {
+      return { tab: activeTab, isCrossTab: false };
+    }
+  } catch {}
+  return { tab: null, isCrossTab: false };
+};
+
 const refreshExportTestButton = async () => {
   const buttons = [elements.startExportTestButton, elements.startTradeExportButton];
   buttons.forEach((button) => { button.disabled = true; });
   try {
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const ready = Boolean(activeTab?.id && activeTab.url && routeForUrl(activeTab.url).kind === "portal_page");
+    const { tab } = await findTargetTab();
+    const ready = Boolean(tab?.id && tab.url && routeForUrl(tab.url).kind === "portal_page");
     buttons.forEach((button) => { button.disabled = !ready; });
+    if (elements.openPortalButton) {
+      elements.openPortalButton.hidden = ready;
+    }
   } catch {
     buttons.forEach((button) => { button.disabled = true; });
   }
@@ -101,23 +128,17 @@ const classifyMerchant = (frames) => {
   };
 };
 
-const sameDocumentUrl = (left, right) => {
-  try {
-    const a = new URL(left);
-    const b = new URL(right);
-    return a.origin === b.origin && a.pathname === b.pathname;
-  } catch {
-    return Boolean(left && right && left === right);
-  }
-};
-
 const makeSnapshot = (injectionResults, tabUrl) => {
   const collectedFrames = injectionResults
     .map((entry) => entry.result ? { ...entry.result, frameId: entry.frameId } : null)
     .filter(Boolean);
   const topFrame = collectedFrames.find((frame) => frame.isTopFrame) || collectedFrames[0];
   if (!topFrame) throw new Error("没有读取到页面内容。请确认页面已加载后重试。");
-  if (!isScannableTargetUrl(topFrame.url) || !sameDocumentUrl(topFrame.url, tabUrl)) {
+  const pathMatch = (() => {
+    try { return new URL(topFrame.url).pathname === new URL(tabUrl).pathname; }
+    catch { return topFrame.url === tabUrl; }
+  })();
+  if (!isScannableTargetUrl(topFrame.url) || !pathMatch) {
     throw new Error("扫描期间页面地址发生变化；请停留在银联商务页面后重试。");
   }
 
@@ -228,15 +249,34 @@ const renderRouteOnly = (tab) => {
 
 const showUnsavedPageState = async () => {
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url) return;
+    const { tab, isCrossTab } = await findTargetTab();
+    if (!tab?.id || !tab.url) {
+      if (elements.site) {
+        elements.site.textContent = "未检测到银联商务";
+        elements.site.className = "status-negative";
+      }
+      if (elements.login) elements.login.textContent = "未登录";
+      if (elements.merchant) elements.merchant.textContent = "—";
+      if (elements.openPortalButton) elements.openPortalButton.hidden = false;
+      return;
+    }
     renderRouteOnly(tab);
-    if (!isScannableTargetUrl(tab.url)) return;
+    if (!isScannableTargetUrl(tab.url)) {
+      if (isCrossTab && elements.site) {
+        elements.site.textContent = "✓ 已关联后台门户";
+        elements.site.className = "status-positive";
+      }
+      if (elements.openPortalButton) elements.openPortalButton.hidden = false;
+      return;
+    }
 
     const results = await injectAndScan(tab.id);
     const snapshot = makeSnapshot(results, tab.url);
-    await chrome.storage.local.set({ [STORAGE_KEY]: snapshot });
     renderSummary(snapshot);
+    if (isCrossTab && elements.site) {
+      elements.site.textContent = "✓ 已关联后台门户";
+      elements.site.className = "status-positive";
+    }
   } catch (error) {
     if (elements.error) elements.error.textContent = error?.message || "";
   }
@@ -247,8 +287,12 @@ const startExport = async (reportType) => {
   elements.startExportTestButton.disabled = true;
   elements.startTradeExportButton.disabled = true;
   try {
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const tab = activeTab;
+    const targetResult = typeof findTargetTab === "function" ? await findTargetTab() : null;
+    let tab = targetResult?.tab;
+    if (!tab && chrome?.tabs?.query) {
+      const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tab = (activeTab?.id && activeTab.url && routeForUrl(activeTab.url).kind === "portal_page") ? activeTab : null;
+    }
     if (!tab?.id || !tab.url || routeForUrl(tab.url).kind !== "portal_page") {
       throw new Error("请先打开已登录的银联商务门户页面。");
     }
@@ -265,5 +309,12 @@ const startExport = async (reportType) => {
 
 elements.startExportTestButton.addEventListener("click", () => startExport("account-detail"));
 elements.startTradeExportButton.addEventListener("click", () => startExport("trade-audit"));
+
+if (elements.openPortalButton) {
+  elements.openPortalButton.addEventListener("click", async () => {
+    await chrome.tabs.create({ url: "https://service.chinaums.com/uisportal/index" });
+    window.close();
+  });
+}
 
 showUnsavedPageState().finally(refreshExportTestButton);
