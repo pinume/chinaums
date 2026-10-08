@@ -25,7 +25,7 @@ async function check(trade, mode) {
       }};
     }
   });
-  vm.runInContext(fs.readFileSync(`${__dirname}/${trade?'trade-audit':'account-detail'}.js`,'utf8'),context);
+  vm.runInContext(fs.readFileSync(`${__dirname}/../${trade?'trade-audit':'account-detail'}.js`,'utf8'),context);
   const adapter = context[trade?'__chinaumsTradeAuditAdapter':'__chinaumsAccountDetailAdapter'];
   const result = await adapter('query',{start:'2026-01-01',end:'2026-01-31',operationDeadline:3000});
   assert.equal(result.status,'failed',`${mode} must not yield a usable query`);

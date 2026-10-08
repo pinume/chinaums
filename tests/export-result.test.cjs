@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync(`${__dirname}/export-runner.js`, 'utf8');
+const source = fs.readFileSync(`${__dirname}/../export-runner.js`, 'utf8');
 const elements = Object.fromEntries(['result', 'resultTitle', 'resultMessage', 'status', 'stage', 'month', 'progress', 'downloadProgress', 'gate'].map(name => [name, {
   attributes: {}, scrolls: 0,
   setAttribute(key, value) { this.attributes[key] = value; },
@@ -52,11 +52,12 @@ const startup = vm.createContext({URLSearchParams, Date, Intl, location: {search
     return startupElements.get(selector);
   }}
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/site-config.js`, 'utf8'), startup);
+vm.runInContext(fs.readFileSync(`${__dirname}/../site-config.js`, 'utf8'), startup);
 vm.runInContext(source, startup);
 setImmediate(() => {
   assert.equal(startupElements.get('#export-result').hidden, false);
   assert.match(startupElements.get('#export-result-message').textContent, /导出参数无效/);
   assert.equal(startupElements.get('#export-close').disabled, false);
+  assert.equal(startupElements.get('#export-back').tabIndex, 0);
   console.log('PASS: visible success, partial failure, no data, user stop, startup failure, Chinese status and one-time scroll');
 });

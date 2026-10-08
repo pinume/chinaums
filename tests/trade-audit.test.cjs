@@ -45,7 +45,7 @@ const context = vm.createContext({
   setTimeout,
   clearTimeout
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../trade-audit.js`, "utf8"), context);
 
 (async () => {
   const adapter = context.__chinaumsTradeAuditAdapter;

@@ -37,7 +37,7 @@ const context = vm.createContext({
   localStorage:{getItem:()=>"TEST_TOKEN",setItem:()=>{}},
   setTimeout, clearTimeout
 });
-vm.runInContext(fs.readFileSync(__dirname + '/trade-audit.js','utf8'), context);
+vm.runInContext(fs.readFileSync(__dirname + '/../trade-audit.js','utf8'), context);
 
 (async () => {
   const result = await context.__chinaumsTradeAuditAdapter('snapshotExportTasks', {

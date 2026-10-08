@@ -26,7 +26,7 @@ async function check(mode) {
       return {ok:true,status:200,json:async()=>data};
     }
   });
-  vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`,'utf8'),context);
+  vm.runInContext(fs.readFileSync(`${__dirname}/../trade-audit.js`,'utf8'),context);
   const adapter=context.__chinaumsTradeAuditAdapter;
   const state=await adapter('query',{start:'2026-01-01',end:'2026-01-31',operationDeadline:Date.now()+30000});
   if(mode==='init-failed') {assert.equal(state.status,'failed');assert.equal(queries,0);return;}

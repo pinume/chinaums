@@ -5,11 +5,11 @@ const vm = require("node:vm");
 const trade = process.argv.includes("trade-audit");
 const unknownSubmit = process.argv.includes("UNKNOWN");
 const stopAtSubmit = process.argv.includes("STOPPED");
-let downloadListOpen = process.argv.includes("LIST_OPEN");
 const elements = new Map();
 const element = (selector) => {
   if (!elements.has(selector)) elements.set(selector, {
-    listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; }, setAttribute() {}, append() {}, scrollIntoView() {}
+    listeners: {}, attributes: {}, addEventListener(name, callback) { this.listeners[name] = callback; },
+    setAttribute(name, value) { this.attributes[name] = value; }, append() {}, scrollIntoView() {}
   });
   return elements.get(selector);
 };
@@ -20,8 +20,8 @@ const context = vm.createContext({
   window: { setTimeout, clearTimeout },
   document: { querySelector: element, createElement: element }
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/site-config.js`, "utf8"), context);
-vm.runInContext(fs.readFileSync(`${__dirname}/monthly-runner.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../site-config.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../monthly-runner.js`, "utf8"), context);
 const months = context.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths();
 const merchantNo = "89813014812B1L3";
 const prior = {
@@ -50,7 +50,6 @@ const remoteTasks = [];
 let submits = 0;
 let downloadRuns = 0;
 let adapterInjections = 0;
-let startupCloseCalls = 0;
 let latest;
 let archived;
 const closedTabs = [];
@@ -83,13 +82,20 @@ context.chrome = {
     set: async (value) => {
       if (value.archivedExportRuns) archived = value.archivedExportRuns;
       if (value.activeExportRun) latest = value.activeExportRun;
+      if (latest?.stage === "SUBMITTING" || latest?.status === "WAITING_GENERATION") {
+        const back = elements.get("#export-back");
+        assert.equal(back.attributes["aria-disabled"], "true");
+        let prevented = false;
+        back.listeners.click({preventDefault() {prevented = true;}});
+        assert.equal(prevented, true, "return link must not interrupt an active export");
+      }
       if (stopAtSubmit && latest?.stage === "SUBMITTING") elements.get("#export-stop").listeners.click();
       if (["COMPLETED", "BLOCKED", "STOPPED"].includes(value.activeExportRun?.status)) complete(value.activeExportRun);
     }
   } },
   scripting: { executeScript: async ({ args, files, world, target }) => {
     if (target.frameIds) assert.deepEqual(Array.from(target.frameIds), [0]);
-    if (args?.length > 1) assert(!["inspect", "closeDownloadList", "closeSubmitDialog", "classifySubmit", "submitDialogState"].includes(args[1]));
+    if (args?.length > 1) assert(!["inspect", "openDownloadList", "closeDownloadList", "closeSubmitDialog", "classifySubmit", "submitDialogState"].includes(args[1]));
     if (files) {
       if (files.includes(trade ? "trade-audit.js" : "account-detail.js")) { assert.equal(world, "ISOLATED"); adapterInjections += 1; }
       return [];
@@ -113,33 +119,23 @@ context.chrome = {
       }
     }
     if (stopAtSubmit) {
-      if (args[1] === "submitDialogState") return [{result: {status: "clear"}}];
       if (args[1] === "query") return [{result: {status: "ready", count: 1,
         ...(trade ? {merchantId: "internal-id"} : {merchantNo})}}];
       if (args[1] === "snapshotExportTasks") return [{result: {status: "found", rows: []}}];
     }
     assert(!["setDateRange", "query", "submitExport"].includes(args[1]), "stop must prevent export submission");
-    if (args[1] === "inspect") return [{ result: {
-      status: downloadListOpen ? "controls_missing" : "ready",
-      hasQuery: !downloadListOpen,
-      downloadListOpen
-    } }];
-    if (args[1] === "closeDownloadList") {
-      startupCloseCalls += 1;
-      if (downloadListOpen) {
-        downloadListOpen = false;
-        return [{ result: { status: "closed" } }];
-      }
-      return [{ result: { status: "already_closed" } }];
-    }
     return [{ result: { status: "unknown" } }];
   } }
 };
-vm.runInContext(fs.readFileSync(`${__dirname}/export-runner.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../export-runner.js`, "utf8"), context);
 const timer = setTimeout(() => { console.error("FAIL: resume did not finish"); process.exitCode = 1; }, stopAtSubmit || unknownSubmit ? 5000 : 1000);
 completed.then((state) => {
   assert.equal(elements.get("#export-result").hidden, false);
   assert.equal(elements.get("#export-close").disabled, false);
+  assert.equal(elements.get("#export-back").attributes["aria-disabled"], "false");
+  let prevented = false;
+  elements.get("#export-back").listeners.click({preventDefault() {prevented = true;}});
+  assert.equal(prevented, false, "terminal runs allow returning to the popup");
   assert.equal(elements.get("#export-pause").disabled, true);
   assert.equal(elements.get("#export-stop").disabled, true);
   if (stopAtSubmit) {
@@ -161,8 +157,6 @@ completed.then((state) => {
   assert.equal(state.merchantNo, merchantNo);
   assert(elements.get("#export-target").textContent.includes(merchantNo), "both reports must display the identified merchant");
   assert.equal(adapterInjections, unknownSubmit ? 1 : 0, "replace a preexisting adapter once without resetting it for every operation");
-  assert.equal(startupCloseCalls, 0,
-    `${trade ? "trade" : "account"} startup must only touch the download list when inspect confirms it is already open`);
   assert.equal(state.logs.filter((message) => message.startsWith("暂存接口暂未确认")).length, 1,
     "unchanged polling results must not spam the log");
   console.log(unknownSubmit ? `PASS: ${trade ? "trade" : "account"} export entry reconciles UNKNOWN tasks and persists exact identity without replay`

@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-require('./download-runner.js');
+require('../download-runner.js');
 
 const originalNow = Date.now;
 let now = new Date(2026, 9, 5, 12).getTime();

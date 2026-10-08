@@ -37,7 +37,7 @@ const context = vm.createContext({
   },
   clearTimeout: () => {}
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/account-detail.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../account-detail.js`, "utf8"), context);
 
 const merchantNo = "89813015722APT1";
 const args = {

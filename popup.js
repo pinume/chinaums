@@ -2,6 +2,7 @@ const SITE_CONFIG = globalThis.CHINAUMS_SITE_CONFIG;
 if (!SITE_CONFIG) throw new Error("银联商务站点配置未加载。");
 const TARGET_HOST = SITE_CONFIG.host;
 const PORTAL_ROOT = SITE_CONFIG.portalRoot;
+let verifiedPortalTabId = null;
 
 const elements = {
   site: document.querySelector("#site-status"),
@@ -82,7 +83,7 @@ const refreshExportTestButton = async () => {
   buttons.forEach((button) => { button.disabled = true; });
   try {
     const { tab } = await findTargetTab();
-    const ready = Boolean(tab?.id && tab.url && routeForUrl(tab.url).kind === "portal_page");
+    const ready = Boolean(tab?.id === verifiedPortalTabId && tab.url && routeForUrl(tab.url).kind === "portal_page");
     buttons.forEach((button) => { button.disabled = !ready; });
     if (elements.openPortalButton) {
       elements.openPortalButton.hidden = ready;
@@ -102,30 +103,7 @@ const classifyMerchant = (frames) => {
       return rightRank - leftRank || Number(right.isTopFrame) - Number(left.isTopFrame);
   });
   const selected = candidates.find((item) => item.merchant.current)?.merchant || {};
-  const merchantControl = candidates.find((item) => item.merchant.merchantControl?.found)?.merchant.merchantControl || { found: false };
-  const switchControl = candidates.find((item) => item.merchant.switchControl?.found)?.merchant.switchControl || { found: false };
-  const current = selected.current || null;
-  const currentNo = selected.merchantNo || null;
-  const target = selected.target || frames.find((frame) => frame.merchant?.target)?.merchant.target || SITE_CONFIG.targetMerchant;
-  const status = !current ? "unknown" :
-    (!target || current.replace(/\s/g, "") === target.replace(/\s/g, "")) ? "matched" : "detected";
-
-  return {
-    target,
-    current,
-    currentMerchantNo: currentNo,
-    status,
-    confidence: current ? selected.confidence || "low" : "low",
-    source: current ? selected.source || null : null,
-    merchantControl,
-    switchControl,
-    merchantPanel: {
-      visible: candidates.some((item) => item.merchant.merchantPanel?.visible),
-      currentMerchantLabelVisible: candidates.some((item) => item.merchant.merchantPanel?.currentMerchantLabelVisible),
-      merchantNameLabelVisible: candidates.some((item) => item.merchant.merchantPanel?.merchantNameLabelVisible),
-      switchAvailable: candidates.some((item) => item.merchant.merchantPanel?.switchAvailable)
-    }
-  };
+  return { current: selected.current || null };
 };
 
 const makeSnapshot = (injectionResults, tabUrl) => {
@@ -178,7 +156,6 @@ const injectAndScan = async (tabId) => {
     host: SITE_CONFIG.host,
     portalRoot: SITE_CONFIG.portalRoot,
     frontendRoot: SITE_CONFIG.frontendRoot,
-    targetMerchant: SITE_CONFIG.targetMerchant,
     mainNavigation: SITE_CONFIG.mainNavigation.map(({ path, label }) => ({ path, label }))
   };
   const scanInFrames = (allFrames) => chrome.scripting.executeScript({
@@ -205,11 +182,13 @@ const injectAndScan = async (tabId) => {
 };
 
 const setLoginDisplay = (authentication) => {
-  const labels = { logged_in: "✓ 已登录", logged_out: "未登录", unknown: "无法确定" };
-  elements.login.textContent = labels[authentication?.status] || "尚未检测";
-  elements.login.className = authentication?.status === "logged_in"
+  const status = authentication?.status === "logged_in" && authentication.confidence !== "high"
+    ? "unknown" : authentication?.status;
+  const labels = { checking: "检测中…", logged_in: "✓ 已登录", logged_out: "未登录", unknown: "无法确定" };
+  elements.login.textContent = labels[status] || "尚未检测";
+  elements.login.className = status === "logged_in"
     ? "status-positive"
-    : authentication?.status === "logged_out" ? "status-negative" : "";
+    : status === "logged_out" ? "status-negative" : "";
 };
 
 const setMerchantDisplay = (merchant) => {
@@ -243,7 +222,7 @@ const renderRouteOnly = (tab) => {
   } else if (route.kind === "other_page" || route.kind === "other_site") {
     setLoginDisplay({ status: "unknown", reasons: ["请在银联商务门户页面使用"] });
   } else {
-    setLoginDisplay({ status: "logged_in", confidence: "medium", reasons: ["检测到门户路由，正在读取商户信息…"] });
+    setLoginDisplay({ status: "checking" });
   }
 };
 
@@ -272,12 +251,17 @@ const showUnsavedPageState = async () => {
 
     const results = await injectAndScan(tab.id);
     const snapshot = makeSnapshot(results, tab.url);
+    verifiedPortalTabId = snapshot.authentication.status === "logged_in" &&
+      snapshot.authentication.confidence === "high" ? tab.id : null;
     renderSummary(snapshot);
     if (isCrossTab && elements.site) {
       elements.site.textContent = "✓ 已关联后台门户";
       elements.site.className = "status-positive";
     }
   } catch (error) {
+    verifiedPortalTabId = null;
+    setLoginDisplay({ status: "unknown" });
+    if (elements.merchant) elements.merchant.textContent = "未识别";
     if (elements.error) elements.error.textContent = error?.message || "";
   }
 };
@@ -293,8 +277,8 @@ const startExport = async (reportType) => {
       const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
       tab = (activeTab?.id && activeTab.url && routeForUrl(activeTab.url).kind === "portal_page") ? activeTab : null;
     }
-    if (!tab?.id || !tab.url || routeForUrl(tab.url).kind !== "portal_page") {
-      throw new Error("请先打开已登录的银联商务门户页面。");
+    if (!tab?.id || tab.id !== verifiedPortalTabId || !tab.url || routeForUrl(tab.url).kind !== "portal_page") {
+      throw new Error("请先打开银联商务门户，并等待登录检测通过。");
     }
     const runnerUrl = new URL(chrome.runtime.getURL("export.html"));
     runnerUrl.searchParams.set("tabId", String(tab.id));

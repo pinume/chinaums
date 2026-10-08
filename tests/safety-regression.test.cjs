@@ -14,9 +14,9 @@ const context = vm.createContext({ Date: Clock, reportType: 'trade-audit', tabId
   activeNow: () => now, checkpoint: async () => {}, sleep: async ms => { now += ms; }
 });
 for (const file of ['monthly-runner.js', 'download-runner.js']) {
-  vm.runInContext(fs.readFileSync(`${__dirname}/${file}`, 'utf8'), context);
+  vm.runInContext(fs.readFileSync(`${__dirname}/../${file}`, 'utf8'), context);
 }
-const source = fs.readFileSync(`${__dirname}/export-runner.js`, 'utf8');
+const source = fs.readFileSync(`${__dirname}/../export-runner.js`, 'utf8');
 const month = {key: '2026-01', start: '2026-01-01', end: '2026-01-31'};
 
 async function reconcile(mode) {

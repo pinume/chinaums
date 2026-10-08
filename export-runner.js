@@ -16,6 +16,7 @@ const elements = {
   resume: document.querySelector("#export-resume"),
   stop: document.querySelector("#export-stop"),
   close: document.querySelector("#export-close"),
+  back: document.querySelector("#export-back"),
   copyLog: document.querySelector("#export-copy-log"),
   result: document.querySelector("#export-result"),
   resultTitle: document.querySelector("#export-result-title"),
@@ -86,7 +87,6 @@ const scannerConfig = {
   host: SITE_CONFIG.host,
   portalRoot: SITE_CONFIG.portalRoot,
   frontendRoot: SITE_CONFIG.frontendRoot,
-  targetMerchant: SITE_CONFIG.targetMerchant,
   mainNavigation: SITE_CONFIG.mainNavigation.map(({ path, label }) => ({ path, label }))
 };
 
@@ -96,6 +96,8 @@ const updateButtons = () => {
   elements.resume.disabled = !paused || stopRequested;
   elements.stop.disabled = !state || ["COMPLETED", "BLOCKED", "STOPPED"].includes(state.status) || stopRequested;
   elements.close.disabled = !state || !["COMPLETED", "BLOCKED", "STOPPED"].includes(state.status);
+  elements.back.setAttribute("aria-disabled", String(elements.close.disabled));
+  elements.back.tabIndex = elements.close.disabled ? -1 : 0;
 };
 
 const appendLog = (message) => {
@@ -492,6 +494,9 @@ elements.stop.addEventListener("click", () => {
 });
 
 elements.close.addEventListener("click", () => window.close());
+elements.back.addEventListener("click", (event) => {
+  if (elements.close.disabled) event.preventDefault();
+});
 
 if (elements.copyLog) {
   elements.copyLog.addEventListener("click", async () => {
@@ -527,5 +532,7 @@ run().catch(async (error) => {
     elements.stage.textContent = "参数/登录检查";
     renderResult("BLOCKED", error?.message || "导出启动失败。");
     elements.close.disabled = false;
+    elements.back.setAttribute("aria-disabled", "false");
+    elements.back.tabIndex = 0;
   }
 });

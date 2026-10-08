@@ -54,7 +54,7 @@ const context = vm.createContext({
   setTimeout,
   clearTimeout
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../trade-audit.js`, "utf8"), context);
 
 async function ready(adapter) {
   return adapter("query", { start: "2026-09-01", end: "2026-09-30",

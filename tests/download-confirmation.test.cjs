@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const source = fs.readFileSync(`${__dirname}/export-runner.js`, "utf8");
+const source = fs.readFileSync(`${__dirname}/../export-runner.js`, "utf8");
 const fileName = "89813015722APT1_MX_20260930170206.xlsx";
 
 async function check(states, expectedError) {

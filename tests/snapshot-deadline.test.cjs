@@ -29,7 +29,7 @@ async function check(trade, mode) {
     setTimeout:fn=>{timer=fn;return 1;},clearTimeout:()=>{cleared=true;}
   });
   const file = trade?'trade-audit.js':'account-detail.js';
-  vm.runInContext(fs.readFileSync(__dirname+'/'+file,'utf8'),context);
+  vm.runInContext(fs.readFileSync(__dirname+'/../'+file,'utf8'),context);
   const adapter = context[trade?'__chinaumsTradeAuditAdapter':'__chinaumsAccountDetailAdapter'];
   await assert.rejects(adapter('snapshotExportTasks',{operationDeadline:3000}), mode==='abort'?/aborted/:/截止时间/);
   assert.equal(calls,1,'expired read must not request the next page');

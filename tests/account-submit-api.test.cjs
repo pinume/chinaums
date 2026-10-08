@@ -58,7 +58,7 @@ const context = vm.createContext({
     throw new Error(url);
   }
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/account-detail.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../account-detail.js`, "utf8"), context);
 
 async function ready(adapter) {
   assert.equal((await adapter("query", { start: "2026-10-04", end: "2026-10-04",

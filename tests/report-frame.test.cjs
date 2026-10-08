@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const source = fs.readFileSync(`${__dirname}/export-runner.js`, "utf8");
+const source = fs.readFileSync(`${__dirname}/../export-runner.js`, "utf8");
 let response = {status:"ready"}, downloads = 0, downloadResult = 73;
 const fileName = "MERCHANT1_MX_20261005120000.xlsx";
 const taskId = "a".repeat(32);

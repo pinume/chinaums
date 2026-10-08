@@ -8,7 +8,7 @@ const context = vm.createContext({
     {export_id:"one",file_name:"one.xlsx",task_status:"10"},{export_id:"two",file_name:"two.xlsx",task_status:"30"}
   ]}})})
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/account-detail.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../account-detail.js`, "utf8"), context);
 (async () => {
   for (const operation of ["inspect", "submitDialogState", "classifySubmit", "closeSubmitDialog", "closeDownloadList", "openDownloadList", "parseDownloadTasks", "downloadTask"]) {
     assert.equal((await context.__chinaumsAccountDetailAdapter(operation)).status, "unknown_operation");

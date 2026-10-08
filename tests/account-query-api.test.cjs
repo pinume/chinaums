@@ -52,7 +52,7 @@ const context = vm.createContext({
     }) };
   }
 });
-vm.runInContext(fs.readFileSync(`${__dirname}/account-detail.js`, "utf8"), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../account-detail.js`, "utf8"), context);
 
 (async () => {
   const adapter = context.__chinaumsAccountDetailAdapter;

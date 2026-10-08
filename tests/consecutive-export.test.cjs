@@ -7,7 +7,7 @@ class Clock extends Date {
   static now() { return now; }
 }
 const context = vm.createContext({Date: Clock});
-vm.runInContext(fs.readFileSync(`${__dirname}/monthly-runner.js`, 'utf8'), context);
+vm.runInContext(fs.readFileSync(`${__dirname}/../monthly-runner.js`, 'utf8'), context);
 const merchant = 'MERCHANT1';
 const months = [1, 2].map(n => ({key: `2026-0${n}`, start: `2026-0${n}-01`, end: `2026-0${n}-28`}));
 async function check(mode, trade = false) {

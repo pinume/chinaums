@@ -50,7 +50,7 @@ async function check(mode) {
     return { status: "found", rows };
   };
 
-  vm.runInContext(fs.readFileSync(`${__dirname}/monthly-runner.js`, "utf8"), context);
+  vm.runInContext(fs.readFileSync(`${__dirname}/../monthly-runner.js`, "utf8"), context);
   const run = context.CHINAUMS_MONTHLY_RUNNER.run({
     months: [1, ...(mode === "already-bound" ? [2] : [])].map(month => ({
       key: `2026-0${month}`, start: `2026-0${month}-01`, end: `2026-0${month}-28`

@@ -9,7 +9,7 @@ async function check(mode) {
     static now() { return now; }
   }
   const context = vm.createContext({ Date: Clock });
-  vm.runInContext(fs.readFileSync(`${__dirname}/monthly-runner.js`, "utf8"), context);
+  vm.runInContext(fs.readFileSync(`${__dirname}/../monthly-runner.js`, "utf8"), context);
 
   const merchant = "89813015722APT1";
   const tasks = [];

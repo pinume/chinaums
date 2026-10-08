@@ -110,11 +110,9 @@
 
   const detectMerchant = () => {
     const merchantControls = findMerchantLabelControls("我的商户");
-    const switchControls = findMerchantLabelControls("切换商户");
     const headerUserInfo = document.querySelector(".usersImg .userInfo, header .userInfo");
     let current = null;
     let source = null;
-    let confidence = "low";
 
     if (headerUserInfo) {
       const value = extractCurrentMerchant(headerUserInfo, "当前商户") ||
@@ -122,7 +120,6 @@
       if (value) {
         current = cleanText(value, 180);
         source = "merchant-panel";
-        confidence = "high";
       }
     }
 
@@ -137,7 +134,6 @@
         if (val) {
           current = cleanText(val, 180);
           source = "merchant-panel";
-          confidence = "medium";
           break;
         }
       }
@@ -152,7 +148,6 @@
           if (value && /(公司|集团|商城|商场|商贸|商户|中心|合作社|个体)/.test(value)) {
             current = cleanText(value, 180);
             source = "top-navigation";
-            confidence = "medium";
             break;
           }
         }
@@ -161,23 +156,9 @@
     }
 
     return {
-      target: SITE_CONFIG.targetMerchant,
       current,
-      status: current
-        ? cleanText(current, 180).replace(/\s/g, "") === SITE_CONFIG.targetMerchant.replace(/\s/g, "")
-          ? "matched"
-          : "mismatched"
-        : "unknown",
-      confidence: current ? confidence : "low",
       source,
-      merchantControl: merchantControls[0]?.data || { found: false },
-      switchControl: switchControls[0]?.data || { found: false },
-      merchantPanel: {
-        visible: Boolean(current || switchControls.length > 0),
-        currentMerchantLabelVisible: Boolean(current),
-        merchantNameLabelVisible: Boolean(current),
-        switchAvailable: switchControls.length > 0
-      }
+      merchantControl: merchantControls[0]?.data || { found: false }
     };
   };
 
@@ -296,8 +277,6 @@
     const names = [...links.map((item) => item.text), ...buttons.map((item) => item.text)];
     const inputLabels = inputs.map((item) => item.label).filter(Boolean);
     const loginControls = names.some((name) => /^(登录|立即登录|用户登录|商户登录)$/.test(name));
-    const logoutControls = names.some((name) => /^(退出|退出登录|安全退出|注销)$/.test(name));
-    const businessNavigation = mainNavigation.length >= 2;
     const accountLabelCue = [...document.querySelectorAll("label,th,td,dt,[class*=label i],[class*=name i]")]
       .filter(isVisible)
       .some((element) => /^(商户名称|商户号|商户编号|商户编码|当前商户|用户名)$/.test(
@@ -311,26 +290,19 @@
       url: safeUrl(window.location.href),
       title: cleanText(document.title, 240),
       isTopFrame,
-      frameName: "",
-      visibleText,
       mainNavigation,
       businessEntries,
       merchant,
-      buttons,
-      links,
-      inputs,
       signals: {
         hasPasswordInput: inputs.some((input) => input.type.toLowerCase() === "password"),
         loginControls,
-        logoutControls,
-        accountCue,
-        businessNavigation
+        accountCue
       }
     };
   };
 
   globalThis.__chinaumsAssistantScan = (siteConfig) => {
-    if (!siteConfig?.host || !siteConfig?.portalRoot || !siteConfig?.frontendRoot || !siteConfig?.targetMerchant ||
+    if (!siteConfig?.host || !siteConfig?.portalRoot || !siteConfig?.frontendRoot ||
       !Array.isArray(siteConfig.mainNavigation)) {
       throw new Error("页面扫描配置缺失或无效，请重新加载扩展后重试。");
     }

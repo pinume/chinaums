@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-require("./download-runner.js");
+require("../download-runner.js");
 
 const merchantNo = "89813014812B1L3";
 const tasks = Array.from({ length: 12 }, (_, index) => ({
@@ -116,7 +116,7 @@ async function checkAdapter() {
     },
     clearTimeout: () => {}
   });
-  vm.runInContext(fs.readFileSync(`${__dirname}/trade-audit.js`, "utf8"), context);
+  vm.runInContext(fs.readFileSync(`${__dirname}/../trade-audit.js`, "utf8"), context);
   const adapter = context.__chinaumsTradeAuditAdapter;
   const args = {
     gate: { allowed: true, merchantNo },

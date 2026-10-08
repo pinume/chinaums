@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const context = vm.createContext({Date});
-vm.runInContext(fs.readFileSync(__dirname + '/monthly-runner.js', 'utf8'), context);
+vm.runInContext(fs.readFileSync(__dirname + '/../monthly-runner.js', 'utf8'), context);
 const yearToDate = context.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths;
 const january = yearToDate(new Date(2026, 0, 1));
 assert.equal(january.length, 1); assert.equal(january[0].end, '2026-01-01');
@@ -27,7 +27,6 @@ async function run() {
         return{status:'accepted'};
       }
       if(operation==='query')return{status:'ready',count:132,merchantNo:'89813014812B1L3'};
-      if(operation==='closeSubmitDialog')return{status:'closed'};
       throw new Error(operation);
     }
   });
@@ -62,17 +61,12 @@ async function run() {
     assert.equal(queries, 1);
     if (outcome !== 'stop-after-query') assert(failedEvents.some(event => event.status === 'FAILED'));
   }
-  for (const closeFails of [false, true, 'timeout', 'stopped']) {
+  {
     let submits = 0, snapshots = 0;
     const events = [];
     const invoke = async operation => {
       if (operation === 'query') return {status:'ready',count:1,merchantNo:'89813015722APT1',merchantId:'merchant-id'};
       if (operation === 'submitExport') { submits++; return {status:'accepted'}; }
-      if (operation === 'closeSubmitDialog') {
-        if (closeFails === 'timeout') throw new Error('页面操作“closeSubmitDialog”在15秒内没有响应。');
-        if (closeFails === 'stopped') throw new Error('STOPPED_BY_USER');
-        return closeFails ? {status:'blocked',reason:'弹窗仍打开'} : {status:'closed'};
-      }
       if (operation === 'snapshotExportTasks') {
         snapshots++;
         if (snapshots === 1) return {status:'found',rows:[]};
@@ -87,7 +81,7 @@ async function run() {
       checkpoint:async()=>{},sleep:async()=>{},transition:async event=>events.push({...event})});
     const result = await promise;
     assert.equal(result[0].remoteTaskId, 'new-task');
-    assert.equal(snapshots, 5, 'task binding works regardless of page dialog state');
+    assert.equal(snapshots, 5, 'task binding tolerates loading, temporary errors and delayed tasks');
     assert.equal(submits, 1, 'accepted export must never be resubmitted');
   }
   console.log('PASS: monthly trade export binds each new server task before starting the next month');

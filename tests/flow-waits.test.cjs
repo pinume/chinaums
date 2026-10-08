@@ -6,9 +6,9 @@ async function check(trade, stuck) {
   let wall = new Date(2026,9,3).getTime();
   class Clock extends Date { constructor(...a) { super(...(a.length?a:[wall])); } static now() { return wall; } }
   const c = vm.createContext({Date:Clock});
-  const source = fs.readFileSync(`${__dirname}/export-runner.js`,'utf8');
+  const source = fs.readFileSync(`${__dirname}/../export-runner.js`,'utf8');
   vm.runInContext(source.slice(source.indexOf('let pausedAt ='),source.indexOf('const statusLabels ='))+'\nglobalThis.now = activeNow;',c);
-  for (const name of ['monthly-runner.js','download-runner.js']) vm.runInContext(fs.readFileSync(`${__dirname}/${name}`,'utf8'),c);
+  for (const name of ['monthly-runner.js','download-runner.js']) vm.runInContext(fs.readFileSync(`${__dirname}/../${name}`,'utf8'),c);
   const pause = () => {
     const before = c.now();
     vm.runInContext('pausedAt = Date.now();',c);

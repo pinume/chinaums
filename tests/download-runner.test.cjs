@@ -1,5 +1,5 @@
 const assert = require("node:assert/strict");
-require("./download-runner.js");
+require("../download-runner.js");
 
 const originalDateNow = Date.now;
 const merchantNo = "89813014812B06R";

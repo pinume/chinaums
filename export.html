@@ -16,7 +16,7 @@
           <h1>报表导出控制台</h1>
           <span id="export-target" class="target-badge"></span>
         </div>
-        <a class="back-link" href="popup.html">← 返回插件</a>
+        <a id="export-back" class="back-link" href="popup.html" aria-disabled="true" tabindex="-1">← 返回插件</a>
       </div>
     </header>
 
@@ -54,7 +54,13 @@
         <ol id="export-log" class="prepare-log"></ol>
       </section>
 
-      <p class="privacy-note">沿用当前登录会话，不选择或切换商户。交易明细从查询结果识别商户号；已上传明细从本轮新申请的文件名识别商户号。按年初至今逐月查询；交易明细固定普通交易，不读取网页筛选条件。全部文件生成后连续下载，每份由 Chrome 确认完成后再下载下一份。</p>
+      <div class="privacy-note">
+        <p>运行期间请保留门户和此页面，完成后查看 Chrome 下载记录。</p>
+        <details>
+          <summary>查看导出规则</summary>
+          <p>沿用当前登录会话，不选择或切换商户。按年初至今逐月查询；交易明细固定普通交易，不读取网页筛选条件。全部文件生成后逐份下载，每份由 Chrome 确认完成后再下载下一份。</p>
+        </details>
+      </div>
     </main>
     <script src="site-config.js"></script>
     <script src="auth.js"></script>

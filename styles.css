@@ -132,11 +132,15 @@ h1, h2, h3, h4, p { margin-top: 0; }
   color: var(--text-main);
 }
 
-.status-positive {
+.status-positive,
+.status-line strong.status-positive,
+.detail-row strong.status-positive {
   color: var(--success);
 }
 
-.status-negative {
+.status-negative,
+.status-line strong.status-negative,
+.detail-row strong.status-negative {
   color: var(--warning);
 }
 
@@ -242,7 +246,7 @@ button:disabled {
    ========================================= */
 
 .details-page {
-  min-width: 720px;
+  min-width: 320px;
   min-height: 100vh;
   margin: 0;
   padding: 0 0 24px;
@@ -406,6 +410,8 @@ button:disabled {
 }
 
 #export-stage, #export-download-progress {
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-size: 12px;
 }
 
@@ -499,4 +505,21 @@ button:disabled {
   color: #92400e;
   background: var(--warning-bg);
   border-color: var(--warning-border);
+}
+
+.back-link[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.privacy-note p { margin: 0; }
+.privacy-note summary { margin-top: 6px; cursor: pointer; }
+.privacy-note details[open] p { margin-top: 6px; }
+
+@media (max-width: 720px) {
+  .header-inner, .card-header-flex { flex-wrap: wrap; gap: 12px; }
+  .overview-grid { grid-template-columns: 1fr; }
+  .details-actions { flex-wrap: wrap; }
+  .target-badge { overflow-wrap: anywhere; }
 }

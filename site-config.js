@@ -2,7 +2,6 @@ globalThis.CHINAUMS_SITE_CONFIG = Object.freeze({
   host: "service.chinaums.com",
   portalRoot: "/uisportal",
   frontendRoot: "/uisportalfront",
-  targetMerchant: "北国商城股份有限公司",
   mainNavigation: Object.freeze([
     { path: "/uisportal/index_r", label: "首页" },
     { path: "/uisportal/accountingCenter", label: "账务中心" },
