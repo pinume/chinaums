@@ -36,12 +36,14 @@ prior.months[months[0].key].downloadedFileName = "already-clicked.xlsx";
 context.CHINAUMS_AUTH = { classify: () => ({ status: "logged_in", confidence: "high" }) };
 if (!stopAtSubmit && !unknownSubmit) context.CHINAUMS_MONTHLY_RUNNER = {
   yearToDateMonths: context.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths,
+  fullYearRange: context.CHINAUMS_MONTHLY_RUNNER.fullYearRange,
   run: async (args) => {
-    assert.equal(args.months.length, months.length);
+    const expectedCount = trade ? 1 : months.length;
+    assert.equal(args.months.length, expectedCount);
     assert.equal(args.targetMerchantNo, undefined);
     assert(Object.values(latest.months).every((month) => month.status === "PENDING"));
     await args.onMerchantVerified(merchantNo);
-    await args.transition({ month: months[0].key, status: "WAITING_FOR_SLOT", retryInMs: 60000, attempt: 2 });
+    await args.transition({ month: args.months[0].key, status: "WAITING_FOR_SLOT", retryInMs: 60000, attempt: 2 });
     assert(latest.logs.some(log => log.includes("第 2 次") && log.includes("60 秒")));
     for (const month of args.months) await args.transition({ month: month.key, status: "SUBMITTED", submittedAt: new Date().toISOString() });
   }
@@ -57,19 +59,20 @@ context.CHINAUMS_DOWNLOAD_RUNNER = { run: async (args) => {
   downloadRuns += 1;
   if (trade) await args.onMerchantIdentified(merchantNo);
 
+  const expectedCount = trade ? 1 : months.length;
   if (unknownSubmit) {
-    assert.equal(submits, months.length, "UNKNOWN reconciliation must not repeat submissions");
+    assert.equal(submits, expectedCount, "UNKNOWN reconciliation must not repeat submissions");
     assert(args.submittedMonths.every(month => remoteTasks.some(task => task.id === month.remoteTaskId && task.fileName === month.remoteFileName)));
     assert(Object.values(latest.months).every(month => month.reconciled === true));
   }
   assert.notEqual(args.startedAt, prior.startedAt);
-  assert.equal(args.submittedMonths.length, months.length);
+  assert.equal(args.submittedMonths.length, expectedCount);
   assert.equal(args.submittedMonths[0].downloadedFileName, null, "legacy click records must not count as completed");
-  await args.transition({ status: "WAITING_GENERATION", found: 0, expected: months.length, ready: 0 });
-  await args.transition({ status: "WAITING_GENERATION", found: 0, expected: months.length, ready: 0, waitedMs: 125000, remaining: 3 });
-  assert.match(latest.stage, /已等待 2 分 5 秒，剩余 3 个文件未下载/);
+  await args.transition({ status: "WAITING_GENERATION", found: 0, expected: expectedCount, ready: 0 });
+  await args.transition({ status: "WAITING_GENERATION", found: 0, expected: expectedCount, ready: 0, waitedMs: 125000, remaining: 3 });
+  assert.match(latest.stage, /已等待 2 分 5 秒/);
   assert.match(elements.get("#export-stage").textContent, /可暂停或停止/);
-  await args.transition({ status: "WAITING_GENERATION", found: 0, expected: months.length, ready: 0 });
+  await args.transition({ status: "WAITING_GENERATION", found: 0, expected: expectedCount, ready: 0 });
   for (const month of args.submittedMonths) await args.transition({status: "DOWNLOAD_COMPLETED", month: month.month, fileName: `${month.month}.xlsx`, downloadId: 7});
 } };
 const tab = { id: 1, url: trade ? "https://service.chinaums.com/uisportal/index_r" : "https://service.chinaums.com/uisportal/accountCheckDetailQry/toDetail", status: "complete" };
@@ -141,7 +144,8 @@ completed.then((state) => {
   if (stopAtSubmit) {
     assert.equal(state.status, "STOPPED", state.error);
     assert.equal(state.stage, "用户停止");
-    assert.equal(state.months[months[0].key].status, "SUBMITTING");
+    const firstKey = trade ? (context.CHINAUMS_MONTHLY_RUNNER.fullYearRange?.[0]?.key || "2026全年") : months[0].key;
+    assert.equal(state.months[firstKey].status, "SUBMITTING");
     assert.equal(downloadRuns, 0);
     assert(!state.logs.some(message => message.startsWith("流程安全停止")));
     assert.match(elements.get("#export-result-title").textContent, /已停止/);
@@ -149,7 +153,8 @@ completed.then((state) => {
     return;
   }
   assert.equal(state.status, "COMPLETED", state.error);
-  assert.match(elements.get("#export-result-message").textContent, new RegExp(`${months.length} / ${months.length}`));
+  const expectedTotal = trade ? 1 : months.length;
+  assert.match(elements.get("#export-result-message").textContent, new RegExp(`${expectedTotal} / ${expectedTotal}`));
   assert.notEqual(state.runId, prior.runId);
   assert.equal(archived[0].runId, prior.runId);
   if (prior.status === "WAITING_GENERATION") assert.deepEqual(closedTabs, [8]);

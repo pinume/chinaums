@@ -18,6 +18,15 @@
     (_, index) => makeMonthRange(today.getFullYear(), index + 1, today)
   );
 
+  const fullYearRange = (today = new Date()) => {
+    const months = yearToDateMonths(today);
+    return [{
+      key: `${today.getFullYear()}全年`,
+      start: months[0].start,
+      end: months.at(-1).end
+    }];
+  };
+
   const run = async ({ months, reportType, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, onMerchantVerified, now = () => Date.now() }) => {
     if (!Array.isArray(months) || !months.length) throw new Error("没有可执行的月份。");
     const results = [];
@@ -280,6 +289,7 @@
   globalThis.CHINAUMS_MONTHLY_RUNNER = Object.freeze({
     makeMonthRange,
     yearToDateMonths,
+    fullYearRange,
     run
   });
 })();

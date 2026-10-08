@@ -341,7 +341,14 @@ const run = async () => {
     throw new Error("已上传明细采集当前仅适配 2026 页面。");
   }
   const months = globalThis.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths();
-  const monthKeys = months.map((month) => month.key);
+  const isTradeAudit = reportType === "trade-audit";
+  const fullYearRanges = globalThis.CHINAUMS_MONTHLY_RUNNER.fullYearRange?.() || [{
+    key: `${new Date().getFullYear()}全年`,
+    start: months[0].start,
+    end: months.at(-1).end
+  }];
+  const initialRanges = isTradeAudit ? fullYearRanges : months;
+  const monthKeys = initialRanges.map((month) => month.key);
   const stored = await chrome.storage.local.get(RUN_KEY);
   const prior = stored[RUN_KEY];
   const priorIsActive = prior && ["GATING", "RUNNING", "WAITING_FOR_SLOT", "WAITING_GENERATION", "PAUSED", "SUBMITTING", "ALL_MONTHS_SUBMITTED", "ALL_READY", "DOWNLOADING"].includes(prior.status);
@@ -382,10 +389,12 @@ const run = async () => {
     status: "GATING",
     businessGate: { allowed: false, merchantNo: null },
     monthOrder: monthKeys,
-    months: Object.fromEntries(months.map((month) => [month.key, { status: "PENDING", start: month.start, end: month.end }])),
+    months: Object.fromEntries(initialRanges.map((month) => [month.key, { status: "PENDING", start: month.start, end: month.end }])),
     logs: []
   };
-  elements.target.textContent = `当前商户：查询后识别　导出月份：${state.monthOrder[0]} 至 ${state.monthOrder.at(-1)}`;
+  elements.target.textContent = state.monthOrder.length === 1
+    ? `当前商户：查询后识别　导出范围：${state.monthOrder[0]}`
+    : `当前商户：查询后识别　导出月份：${state.monthOrder[0]} 至 ${state.monthOrder.at(-1)}`;
   elements.close.disabled = true;
   await saveState();
 
@@ -396,7 +405,9 @@ const run = async () => {
     Object.assign(gate, { allowed: true, merchantNo, source });
     state.merchantNo = merchantNo;
     state.businessGate = { allowed: true, merchantNo, source };
-    elements.target.textContent = `当前商户号：${merchantNo}　导出月份：${state.monthOrder[0]} 至 ${state.monthOrder.at(-1)}`;
+    elements.target.textContent = state.monthOrder.length === 1
+      ? `当前商户号：${merchantNo}　导出范围：${state.monthOrder[0]}`
+      : `当前商户号：${merchantNo}　导出月份：${state.monthOrder[0]} 至 ${state.monthOrder.at(-1)}`;
     if (changed) appendLog(`已从${source === "download-task" ? "本轮暂存任务" : "查询结果"}识别当前商户号：${merchantNo}。`);
     renderState();
     await saveState();
@@ -405,25 +416,74 @@ const run = async () => {
   elements.gate.textContent = "待查询后核对";
   elements.gate.className = "";
   appendLog(`本轮报表：${reportType === "trade-audit" ? "已上传明细" : "交易明细"}。`);
-  appendLog("当前会话已登录。将沿用当前商户，从今年 1 月开始逐月查询；首个有数据的月份会识别商户号。");
+  if (isTradeAudit) {
+    appendLog("当前会话已登录。优先尝试全年导出；若服务端限制跨度则自动切换按月导出兜底。");
+  } else {
+    appendLog("当前会话已登录。将沿用当前商户，从今年 1 月开始逐月查询；首个有数据的月份会识别商户号。");
+  }
   if (prior?.runId) appendLog(`上次运行（${prior.runId}）已留档；本轮从 ${monthKeys[0]} 重新开始，不会漏掉月份。`);
   await saveState();
 
-  if (months.length) {
-    await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
-      months,
-      reportType,
-      invoke: (operation, args) => invoke(reportType, operation, args),
-      gate,
-      checkpoint,
-      now: activeNow,
-      sleep,
-      transition,
-      onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
-    });
+  let activeRanges = initialRanges;
+  if (isTradeAudit) {
+    let fallbackToMonthly = false;
+    try {
+      await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
+        months: fullYearRanges,
+        reportType,
+        invoke: (operation, args) => invoke(reportType, operation, args),
+        gate,
+        checkpoint,
+        now: activeNow,
+        sleep,
+        transition,
+        onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
+      });
+    } catch (error) {
+      if (error?.message === "STOPPED_BY_USER") throw error;
+      fallbackToMonthly = true;
+      appendLog(`全年导出未成功（${error?.message || "服务端限制或查询失败"}），触发兜底，切换为按月导出。`);
+    }
+
+    if (fallbackToMonthly) {
+      activeRanges = months;
+      state.monthOrder = months.map((month) => month.key);
+      state.months = Object.fromEntries(months.map((month) => [month.key, { status: "PENDING", start: month.start, end: month.end }]));
+      elements.target.textContent = state.monthOrder.length === 1
+        ? `当前商户：${state.merchantNo || "查询后识别"}　导出范围：${state.monthOrder[0]}`
+        : `当前商户：${state.merchantNo || "查询后识别"}　导出月份：${state.monthOrder[0]} 至 ${state.monthOrder.at(-1)}`;
+      renderState();
+      await saveState();
+
+      await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
+        months,
+        reportType,
+        invoke: (operation, args) => invoke(reportType, operation, args),
+        gate,
+        checkpoint,
+        now: activeNow,
+        sleep,
+        transition,
+        onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
+      });
+    }
+  } else {
+    if (months.length) {
+      await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
+        months,
+        reportType,
+        invoke: (operation, args) => invoke(reportType, operation, args),
+        gate,
+        checkpoint,
+        now: activeNow,
+        sleep,
+        transition,
+        onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
+      });
+    }
   }
 
-  const submittedMonths = months
+  const submittedMonths = activeRanges
     .filter((month) => state.months[month.key]?.status === "SUBMITTED")
     .map((month) => ({
       month: month.key,
@@ -434,7 +494,9 @@ const run = async () => {
         ? state.months[month.key].downloadedFileName : null
     }));
   state.status = "ALL_MONTHS_SUBMITTED";
-  state.stage = "所有月份申请完成，准备等待文件生成并下载";
+  state.stage = isTradeAudit && activeRanges === fullYearRanges
+    ? "全年申请完成，准备等待文件生成并下载"
+    : "所有月份申请完成，准备等待文件生成并下载";
   await saveState();
 
   if (submittedMonths.length) {

@@ -10,6 +10,16 @@ const leap = yearToDate(new Date(2024, 2, 15));
 assert.equal(leap[1].end, '2024-02-29'); assert.equal(leap[2].end, '2024-03-15');
 const december = yearToDate(new Date(2026, 11, 31));
 assert.equal(december.length, 12); assert.equal(december[11].end, '2026-12-31');
+
+const fullYear = context.CHINAUMS_MONTHLY_RUNNER.fullYearRange;
+const full2026 = fullYear(new Date(2026, 9, 8));
+assert.equal(full2026.length, 1);
+assert.equal(full2026[0].key, '2026全年');
+assert.equal(full2026[0].start, '2026-01-01');
+assert.equal(full2026[0].end, '2026-10-08');
+const fullDec = fullYear(new Date(2026, 11, 31));
+assert.equal(fullDec[0].end, '2026-12-31');
+
 const months = [{key: '2026-01', start: '2026-01-01', end: '2026-01-31'}, {key: '2026-02', start: '2026-02-01', end: '2026-02-28'}];
 async function run() {
   const calls = [];
