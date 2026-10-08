@@ -9,7 +9,7 @@ const calls = [];
 const merchantId = "merchant-id";
 const makeRows = (count, current) => Array.from({ length: count }, (_, index) => ({
   id: `row-${current}-${index}`,
-  mchntId: mode === "mixed" && current === 1 && index === 0 ? "other-merchant" : merchantId,
+  mchntId: mode === "mixed" && index === 1 ? "other-merchant" : merchantId,
   transDate: mode === "bad-date" && current === 0 && index === 0 ? "20260831" : "20260915"
 }));
 const respond = async (payload, endpoint, options) => {
@@ -18,12 +18,14 @@ const respond = async (payload, endpoint, options) => {
   if (mode === "api-error") return { success: false, code: "999999", message: "系统异常", data: null };
   if (mode === "no-data") {
     return { success: true, code: "000000", message: "成功",
-      data: { size: 10, current: 0, total: 0, pages: 0, list: [] } };
+      data: { size: 500, current: 0, total: 0, pages: 0, list: [] } };
   }
   const current = payload.current;
-  const list = current === 0 ? makeRows(10, 0) : makeRows(8, 1);
+  assert.equal(current, 0, "query must only request the first page");
+  const list = makeRows(mode === "short-page" ? 499 : 500, 0);
+  if (mode === "duplicate") list[1].id = list[0].id;
   return { success: true, code: "000000", message: "成功",
-    data: { size: 10, current, total: 18, pages: 2, list } };
+    data: { size: 500, current, total: 508, pages: 2, list } };
 };
 
 const context = vm.createContext({
@@ -53,11 +55,10 @@ vm.runInContext(fs.readFileSync(`${__dirname}/../trade-audit.js`, "utf8"), conte
     operationDeadline: Date.now() + 10000, ...args });
   calls.length = 0;
   let state = await query({ targetMerchantId: merchantId });
-  assert.deepEqual(JSON.parse(JSON.stringify(state)), { status: "ready", count: 18, merchantId });
-  assert.equal(calls.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(state)), { status: "ready", count: 508, merchantId });
+  assert.equal(calls.length, 1, "query must not read subsequent pages");
   assert.deepEqual(calls.map((call) => call.payload), [
-    { merOrderId: "", transRef: "", status: [], beginTransDate: "20260901", endTransDate: "20260930", current: 0, size: 10 },
-    { merOrderId: "", transRef: "", status: [], beginTransDate: "20260901", endTransDate: "20260930", current: 1, size: 10 }
+    { merOrderId: "", transRef: "", status: [], beginTransDate: "20260901", endTransDate: "20260930", current: 0, size: 500 }
   ]);
   const gate = { allowed: true, merchantId, authentication: { status: "logged_in", confidence: "high" } };
   const assertBlocked = async () => assert.equal((await adapter("submitExport", { gate, targetMerchantId: merchantId })).status, "blocked");
@@ -75,7 +76,7 @@ vm.runInContext(fs.readFileSync(`${__dirname}/../trade-audit.js`, "utf8"), conte
   mode = "no-data";
   assert.deepEqual(JSON.parse(JSON.stringify(await query({ start: "2026-10-01", end: "2026-10-05" }))), { status: "no_data", count: 0 });
   await assertBlocked();
-  for (const failedMode of ["mixed", "bad-date", "api-error"]) {
+  for (const failedMode of ["mixed", "bad-date", "api-error", "short-page", "duplicate"]) {
     mode = "paged";
     assert.equal((await query()).status, "ready");
     mode = failedMode;

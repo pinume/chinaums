@@ -17,7 +17,7 @@ async function check(mode) {
           queries++;
           data=(mode==='expired'&&queries===1)||mode==='still-expired'
             ? {success:false,code:'999998',message:'回话失效'}
-            : {success:true,code:'000000',data:{size:10,current:0,total:1,pages:1,list:[{id:'row1',mchntId:'merchant-id',transDate:'20260101'}]}};
+            : {success:true,code:'000000',data:{size:500,current:0,total:1,pages:1,list:[{id:'row1',mchntId:'merchant-id',transDate:'20260101'}]}};
         } else if(url.endsWith('/applyExport')) {
           submits++;
           data={success:false,code:'999998',message:'回话失效'};

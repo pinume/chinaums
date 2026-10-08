@@ -57,60 +57,43 @@
       }
     };
     try {
-      const rows = [];
-      let expectedTotal = null;
-      let expectedPages = null;
-      for (let current = 0; ; current += 1) {
-        checkDeadline();
-        const response = await request({
-          merOrderId: "",
-          transRef: "",
-          status: [],
-          beginTransDate,
-          endTransDate,
-          current,
-          size: 10
-        }, "uis-tradein-server/portal/yjhx/v3/queryList", {
-          signal: controller.signal
-        });
-        checkDeadline();
-        if (response?.success !== true || String(response.code ?? "") !== "000000" ||
-          !Array.isArray(response.data?.list)) {
-          throw new Error("以旧换新查询接口结构异常。");
-        }
-        const page = response.data;
-        const total = Number(page.total);
-        const pages = Number(page.pages);
-        const size = Number(page.size);
-        const returnedCurrent = Number(page.current);
-        if (!Number.isInteger(total) || total < 0 || !Number.isInteger(pages) || pages < 0 ||
-          size !== 10 || returnedCurrent !== current) {
-          throw new Error("以旧换新查询分页信息异常。");
-        }
-        expectedTotal ??= total;
-        expectedPages ??= pages;
-        if (total !== expectedTotal || pages !== expectedPages) {
-          throw new Error("以旧换新查询分页总数在读取过程中发生变化。");
-        }
-        rows.push(...page.list);
-        if (total === 0) {
-          if (current !== 0 || page.list.length !== 0) throw new Error("以旧换新空查询分页结构异常。");
-          break;
-        }
-        if (pages < 1 || current >= pages) throw new Error("以旧换新查询页数异常。");
-        if (current + 1 >= pages) break;
+      checkDeadline();
+      const response = await request({
+        merOrderId: "",
+        transRef: "",
+        status: [],
+        beginTransDate,
+        endTransDate,
+        current: 0,
+        size: 500
+      }, "uis-tradein-server/portal/yjhx/v3/queryList", {
+        signal: controller.signal
+      });
+      checkDeadline();
+      if (response?.success !== true || String(response.code ?? "") !== "000000" ||
+        !Array.isArray(response.data?.list)) {
+        throw new Error("以旧换新查询接口结构异常。");
       }
-      if (rows.length !== expectedTotal ||
+      const page = response.data;
+      const total = Number(page.total);
+      const pages = Number(page.pages);
+      if (!Number.isInteger(total) || total < 0 || !Number.isInteger(pages) || pages < 0 ||
+        Number(page.size) !== 500 || Number(page.current) !== 0 || (total > 0 && pages < 1)) {
+        throw new Error("以旧换新查询分页信息异常。");
+      }
+      // ponytail: 仅校验首批 500 条；需要全量商户校验时恢复分页读取。
+      const rows = page.list;
+      if (rows.length !== Math.min(total, 500) ||
         rows.some((row) => !row?.id || !row?.mchntId || !/^\d{8}$/.test(String(row.transDate || ""))) ||
         new Set(rows.map((row) => String(row.id))).size !== rows.length ||
         rows.some((row) => String(row.transDate) < beginTransDate || String(row.transDate) > endTransDate)) {
-        throw new Error("以旧换新查询结果分页不完整或身份异常。");
+        throw new Error("以旧换新查询首批结果不完整或身份异常。");
       }
       const merchants = [...new Set(rows.map((row) => normalize(row.mchntId)).filter(Boolean))];
-      if (expectedTotal > 0 && merchants.length !== 1) {
+      if (total > 0 && merchants.length !== 1) {
         throw new Error("查询结果没有唯一商户身份；未申请导出。");
       }
-      return { count: expectedTotal, merchantId: merchants[0] || null };
+      return { count: total, merchantId: merchants[0] || null };
     } finally {
       clearTimeout(timer);
     }
