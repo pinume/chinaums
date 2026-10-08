@@ -333,70 +333,6 @@ const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => 
   })(), Math.max(0, operationDeadline - Date.now()), operation);
 };
 
-const parsePortalTimestamp = (value) => Date.parse(String(value || "").replace(/-/g, "/"));
-
-const reconcileUnknown = async ({ attemptedAt, sourceTabId = tabId, targetMerchantNo, gate, baselineRows = [] }) => {
-  const merchantNo = normalize(targetMerchantNo);
-  const attemptedAtMs = new Date(attemptedAt).getTime();
-  if (!merchantNo || !Number.isFinite(attemptedAtMs)) return { status: "unknown", reason: "缺少申请时间或已确认商户号，无法安全核对。" };
-  const invokeSource = (operation, args = {}) => invoke(reportType, operation, args, sourceTabId);
-
-  if (["account-detail", "trade-audit"].includes(reportType)) {
-    const previousIds = new Set((Array.isArray(baselineRows) ? baselineRows : [])
-      .map((row) => String(row?.id || "")).filter(Boolean));
-    if (previousIds.size !== baselineRows.length) {
-      return { status: "unknown", reason: "申请前暂存任务基线缺失或身份重复，不能安全核对。" };
-    }
-    const deadline = activeNow() + 15000;
-    while (activeNow() < deadline) {
-      await checkpoint();
-      let snapshot;
-      try {
-        snapshot = await invokeSource("snapshotExportTasks", {
-          operationDeadline: Date.now() + Math.max(0, deadline - activeNow())
-        });
-      } catch (error) {
-        if (error?.message === "STOPPED_BY_USER") throw error;
-        snapshot = { status: "unknown", reason: error?.message || "暂存接口读取失败" };
-      }
-      if (snapshot?.status === "found" && Array.isArray(snapshot.rows)) {
-        const added = snapshot.rows.filter((row) => !previousIds.has(String(row.id || "")));
-        if (added.length > 1) {
-          return { status: "unknown", reason: "提交后出现多个新暂存任务，无法唯一证明本次申请归属；不自动重提。" };
-        }
-        if (added.length === 1) {
-          const row = added[0];
-          const createdAtMs = parsePortalTimestamp(row.createdAt);
-          const accountMatch = String(row.fileName || "").match(/^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
-          const tradeMatch = String(row.fileName || "").match(/^MER_([A-Z0-9]+)_\d{14}_yjhx\.xlsx$/i);
-          const fileMatch = reportType === "trade-audit" ? tradeMatch : accountMatch;
-          const idValid = reportType === "trade-audit"
-            ? /^\d{32}$/.test(String(row.id || ""))
-            : /^[0-9a-f]{32}$/i.test(String(row.id || ""));
-          const alreadyBound = Object.values(state?.months || {}).some((month) =>
-            month.remoteTaskId === row.id || month.remoteFileName === row.fileName
-          );
-          if (!idValid || !fileMatch || normalize(fileMatch[1]) !== merchantNo || !Number.isFinite(createdAtMs) ||
-            createdAtMs < attemptedAtMs - 2000 || createdAtMs > Date.now() + 2000 || alreadyBound) {
-            return { status: "unknown", reason: "唯一新增暂存任务的商户、时间或身份校验未通过；不自动重提。" };
-          }
-          return {
-            status: "accepted",
-            taskId: String(row.id),
-            fileName: row.fileName,
-            createdAt: row.createdAt,
-            merchantNo
-          };
-        }
-      } else if (snapshot?.status && !["unknown", "loading", "empty"].includes(snapshot.status)) {
-        return { status: "unknown", reason: snapshot.reason || snapshot.status };
-      }
-      await sleep(Math.max(0, Math.min(500, deadline - activeNow())));
-    }
-    return { status: "unknown", reason: "15秒内未找到唯一新增暂存任务；不自动重提。" };
-  }
-};
-
 const run = async () => {
   if (!["account-detail", "trade-audit"].includes(reportType) || !Number.isInteger(tabId) || tabId <= 0 || !SITE_CONFIG) throw new Error("导出参数无效。");
   if (reportType === "trade-audit" && new Date().getFullYear() !== 2026) {
@@ -481,7 +417,6 @@ const run = async () => {
       now: activeNow,
       sleep,
       transition,
-      reconcileUnknown,
       onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
     });
   }

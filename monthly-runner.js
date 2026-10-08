@@ -18,7 +18,7 @@
     (_, index) => makeMonthRange(today.getFullYear(), index + 1, today)
   );
 
-  const run = async ({ months, reportType, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, reconcileUnknown, onMerchantVerified, now = () => Date.now() }) => {
+  const run = async ({ months, reportType, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, onMerchantVerified, now = () => Date.now() }) => {
     if (!Array.isArray(months) || !months.length) throw new Error("没有可执行的月份。");
     const results = [];
     let throttleAttempts = 0;
@@ -30,6 +30,74 @@
       results.push(result);
       await transition(result);
       return result;
+    };
+
+    const bindTask = async ({ baselineRows, attemptedAt, response }) => {
+      const unknown = !response;
+      const merchantNo = String(activeMerchantNo || "").replace(/[\s\u200B-\u200D\uFEFF]/g, "").toUpperCase();
+      const attemptedAtMs = new Date(attemptedAt).getTime();
+      if (unknown && (!merchantNo || !Number.isFinite(attemptedAtMs))) {
+        return { status: "unknown", reason: "缺少申请时间或已确认商户号，无法安全核对。" };
+      }
+      const previousIds = new Set(baselineRows.map((row) => unknown ? String(row?.id || "") : row.id));
+      if (unknown && (previousIds.has("") || previousIds.size !== baselineRows.length)) {
+        return { status: "unknown", reason: "申请前暂存任务基线缺失或身份重复，不能安全核对。" };
+      }
+      const deadline = now() + 15000;
+      let snapshotReason = "";
+      while (now() < deadline) {
+        await checkpoint();
+        let snapshot;
+        try {
+          snapshot = await invoke("snapshotExportTasks", {
+            operationDeadline: Date.now() + Math.max(0, deadline - now())
+          });
+        } catch (error) {
+          if (error?.message === "STOPPED_BY_USER") throw error;
+          snapshot = { status: "unknown", reason: error?.message || "暂存读取未响应" };
+        }
+        if (!unknown && now() >= deadline) break;
+        if (snapshot?.status === "found" && Array.isArray(snapshot.rows)) {
+          snapshotReason = "";
+          const added = snapshot.rows.filter((row) => !previousIds.has(unknown ? String(row.id || "") : row.id));
+          if (added.length > 1) {
+            return { status: "unknown", reason: "出现多个新暂存任务，无法唯一确认归属；禁止重提。" };
+          }
+          if (added.length === 1) {
+            const task = added[0];
+            const trade = unknown ? reportType === "trade-audit" : Boolean(activeMerchantId);
+            const match = String(task.fileName || "").match(trade
+              ? /^MER_([A-Z0-9]+)_\d{14}_yjhx\.xlsx$/i
+              : /^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
+            if (unknown) {
+              const createdAtMs = Date.parse(String(task.createdAt || "").replace(/-/g, "/"));
+              const idValid = trade ? /^\d{32}$/.test(String(task.id || ""))
+                : /^[0-9a-f]{32}$/i.test(String(task.id || ""));
+              const alreadyBound = results.some((month) =>
+                month.remoteTaskId === task.id || month.remoteFileName === task.fileName);
+              if (!idValid || !match || match[1].toUpperCase() !== merchantNo ||
+                !Number.isFinite(createdAtMs) || createdAtMs < attemptedAtMs - 2000 ||
+                createdAtMs > Date.now() + 2000 || alreadyBound) {
+                return { status: "unknown", reason: "唯一新增暂存任务的商户、时间或身份校验未通过；不自动重提。" };
+              }
+            } else if (!match || (activeMerchantNo && match[1].toUpperCase() !== activeMerchantNo) ||
+              (response.fileName && response.fileName !== task.fileName) ||
+              baselineRows.some((row) => row.fileName === task.fileName)) {
+              return { status: "unknown", reason: "新任务文件名或商户号无法确认；禁止重提。" };
+            }
+            return { status: "accepted", taskId: unknown ? String(task.id) : task.id, fileName: task.fileName,
+              createdAt: task.createdAt, merchantNo: match[1].toUpperCase() };
+          }
+        } else {
+          snapshotReason = snapshot?.reason || snapshot?.status || "暂存读取无返回结果";
+          if ((!unknown || snapshot?.status) && !["unknown", "loading", "empty"].includes(snapshot?.status)) {
+            return { status: "unknown", reason: snapshotReason };
+          }
+        }
+        await sleep(Math.max(0, Math.min(500, deadline - now())));
+      }
+      return { status: "unknown", reason: unknown ? "15秒内未找到唯一新增暂存任务；不自动重提。"
+        : `15秒内未确认新建暂存任务${snapshotReason ? `（${snapshotReason}）` : ""}；禁止重提。` };
     };
 
     for (const month of months) {
@@ -93,7 +161,6 @@
         await checkpoint();
         const baseline = await invoke("snapshotExportTasks", {});
         if (baseline?.status !== "found" || !Array.isArray(baseline.rows)) throw new Error(`${month.key} 无法读取申请前暂存任务；未申请导出。`);
-        const previousIds = new Set(baseline.rows.map((row) => row.id));
         const attemptedAt = new Date().toISOString();
         await transition({ month: month.key, status: "SUBMITTING", attemptedAt });
         let submit;
@@ -116,46 +183,11 @@
           const accepted = await setMonthState(month, "SUBMITTED", { submittedAt: attemptedAt, remoteFileName: response.fileName || null, count: queryState.count });
           throttleAttempts = 0;
           submitted = true;
-          const deadline = now() + 15000;
-          let task = null;
-          let snapshotReason = "";
-          while (now() < deadline) {
-            await checkpoint();
-            let snapshot;
-            try {
-              snapshot = await invoke("snapshotExportTasks", { operationDeadline: Date.now() + Math.max(0, deadline - now()) });
-            } catch (error) {
-              if (error?.message === "STOPPED_BY_USER") throw error;
-              snapshotReason = error?.message || "暂存读取未响应";
-              await sleep(Math.max(0, Math.min(500, deadline - now())));
-              continue;
-            }
-            if (now() >= deadline) break;
-            if (snapshot?.status !== "found" || !Array.isArray(snapshot.rows)) {
-              snapshotReason = snapshot?.reason || snapshot?.status || "暂存读取无返回结果";
-              if (!["unknown", "loading", "empty"].includes(snapshot?.status)) {
-                throw new Error(`${month.key} 已提交，但无法核对新建暂存任务（${snapshotReason}）；禁止重提。`);
-              }
-              await sleep(Math.max(0, Math.min(500, deadline - now())));
-              continue;
-            }
-            snapshotReason = "";
-            const added = snapshot.rows.filter((row) => !previousIds.has(row.id));
-            if (added.length > 1) throw new Error(`${month.key} 已提交，但出现多个新暂存任务，无法唯一确认归属；禁止重提。`);
-            if (added.length === 1) { task = added[0]; break; }
-            await sleep(Math.max(0, Math.min(500, deadline - now())));
-          }
-          if (!task) throw new Error(`${month.key} 已提交，但15秒内未确认新建暂存任务${snapshotReason ? `（${snapshotReason}）` : ""}；禁止重提。`);
-          const match = task?.fileName?.match(activeMerchantId
-            ? /^MER_([A-Z0-9]+)_\d{14}_yjhx\.xlsx$/i
-            : /^([A-Z0-9]+)_MX_\d{14}(?:_[^.]*)?\.xlsx$/i);
-          if (!match || (activeMerchantNo && match[1].toUpperCase() !== activeMerchantNo) ||
-            (response.fileName && response.fileName !== task.fileName) || baseline.rows.some((row) => row.fileName === task?.fileName)) {
-            throw new Error(`${month.key} 已提交，但新任务文件名或商户号无法确认；禁止重提。`);
-          }
-          activeMerchantNo = match[1].toUpperCase();
+          const binding = await bindTask({ baselineRows: baseline.rows, attemptedAt, response });
+          if (binding.status !== "accepted") throw new Error(`${month.key} 已提交，但${binding.reason}`);
+          activeMerchantNo = binding.merchantNo;
           gate.merchantNo = activeMerchantNo;
-          Object.assign(accepted, { remoteFileName: task.fileName, remoteTaskId: task.id });
+          Object.assign(accepted, { remoteFileName: binding.fileName, remoteTaskId: binding.taskId });
           await transition(accepted);
           if (onMerchantVerified) await onMerchantVerified(activeMerchantNo, "download-task");
           continue;
@@ -219,13 +251,7 @@
         await transition({ month: month.key, status: "UNKNOWN", attemptedAt });
         let reconciliation = { status: "unknown" };
         try {
-          if (reconcileUnknown) reconciliation = await reconcileUnknown({
-            month,
-            attemptedAt,
-            gate,
-            targetMerchantNo: activeMerchantNo,
-            baselineRows: baseline.rows
-          });
+          reconciliation = await bindTask({ baselineRows: baseline.rows, attemptedAt });
         } catch (error) {
           if (error?.message === "STOPPED_BY_USER") throw error;
           reconciliation.reason = error?.message || "未知申请对账失败";

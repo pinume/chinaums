@@ -24,7 +24,7 @@ const context = vm.createContext({
     }}
   }
 });
-vm.runInContext(source.slice(source.indexOf("const injectedAdapters ="), source.indexOf("const parsePortalTimestamp ="))+"globalThis.invokeApi=invoke;",context);
+vm.runInContext(source.slice(source.indexOf("const injectedAdapters ="), source.indexOf("const run ="))+"globalThis.invokeApi=invoke;",context);
 (async()=>{
   for(const report of ["account-detail","trade-audit"]) assert.equal((await context.invokeApi(report,"query")).status,"ready");
   const args={fileName,taskId};

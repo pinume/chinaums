@@ -17,16 +17,23 @@ for (const file of ['monthly-runner.js', 'download-runner.js']) {
   vm.runInContext(fs.readFileSync(`${__dirname}/${file}`, 'utf8'), context);
 }
 const source = fs.readFileSync(`${__dirname}/export-runner.js`, 'utf8');
-vm.runInContext(source.slice(source.indexOf('const parsePortalTimestamp ='), source.indexOf('const run =')) + '\nglobalThis.reconcile = reconcileUnknown;', context);
 const month = {key: '2026-01', start: '2026-01-01', end: '2026-01-31'};
 
 async function reconcile(mode) {
   now = new Date(2026, 8, 30, 12, 0, 1).getTime();
-  context.state = {months: {}};
   const baselineId = '11111111111111111111111111111111';
   const taskId = '20260930120002681550426941423616';
   const calls = [];
-  context.invoke = async (_, operation) => {
+  let submits = 0;
+  let needsBaseline = false;
+  const events = [];
+  const baselineRows = mode === 'duplicate-baseline'
+    ? [{id:baselineId}, {id:baselineId}]
+    : [{id:baselineId}];
+  const invoke = async operation => {
+    if (operation === 'query') { needsBaseline = true; return {status:'ready', count:1, merchantNo, merchantId:'internal-id'}; }
+    if (operation === 'submitExport') { submits++; return {status:'unknown'}; }
+    if (needsBaseline) { needsBaseline = false; return {status:'found', rows:baselineRows}; }
     calls.push(operation);
     assert.equal(operation, 'snapshotExportTasks', 'trade UNKNOWN reconciliation must not use dialog or download-list UI');
     if (mode === 'read-error') throw new Error('temporary API failure');
@@ -47,22 +54,23 @@ async function reconcile(mode) {
     });
     return {status:'found', rows};
   };
-  const baselineRows = mode === 'duplicate-baseline'
-    ? [{id:baselineId}, {id:baselineId}]
-    : [{id:baselineId}];
-  const result = await context.reconcile({
-    attemptedAt: new Clock().toISOString(),
-    targetMerchantNo: merchantNo,
-    gate: {allowed:true,merchantNo},
-    baselineRows
+  const run = context.CHINAUMS_MONTHLY_RUNNER.run({
+    months:mode === 'already-bound' ? [month, {...month, key:'2026-02'}] : [month], reportType:'trade-audit', gate:{}, invoke,
+    checkpoint:async()=>{}, sleep:async ms=>{now+=ms;}, now:()=>now,
+    transition:async event=>events.push({...event})
   });
+  let result;
+  if (mode === 'accepted') result = (await run)[0];
+  else { await assert.rejects(run, /UNKNOWN/); result = events.at(-1); }
+  assert.equal(submits, mode === 'already-bound' ? 2 : 1, 'UNKNOWN must never replay a submission');
   if (mode === 'accepted') {
-    assert.equal(result.status, 'accepted');
-    assert.equal(result.taskId, taskId);
-    assert.equal(result.fileName, fileName.replace('120001', '120002'));
+    assert.equal(result.status, 'SUBMITTED');
+    assert.equal(result.remoteTaskId, taskId);
+    assert.equal(result.remoteFileName, fileName.replace('120001', '120002'));
     assert.deepEqual(calls, ['snapshotExportTasks']);
   } else {
-    assert.equal(result.status, 'unknown', mode);
+    assert.equal(result.status, 'UNKNOWN', mode);
+    if (mode === 'already-bound') assert.match(result.reason, /身份校验未通过/);
     if (['read-error', 'no-new'].includes(mode)) {
       assert(now - new Date(2026, 8, 30, 12, 0, 1).getTime() >= 15000);
     }
@@ -76,25 +84,26 @@ async function monthly(mode) {
   let savedAttempt = false;
   const events = [];
   const result = context.CHINAUMS_MONTHLY_RUNNER.run({
+    reportType: 'trade-audit',
     months: mode === 'switch' ? [month, {...month, key: '2026-02'}] : [month], gate: {},
     checkpoint: async () => {}, sleep: async ms => { now += ms; },
     transition: async event => { events.push(event); if (event.status === 'SUBMITTING') savedAttempt = Boolean(event.attemptedAt); },
-    reconcileUnknown: async args => {
-      reconciles++;
-      assert(savedAttempt);
-      assert.equal(args.targetMerchantNo, merchantNo);
-      assert(Array.isArray(args.baselineRows));
-      if (mode === 'stop-reconcile') throw new Error('STOPPED_BY_USER');
-      if (mode === 'reconcile-error') throw new Error('snapshot timeout');
-      return {status: 'accepted', fileName, taskId:'20260930120002681550426941423616'};
-    },
     invoke: async operation => {
       if (operation === 'query') {
         if (mode === 'stop-query') throw new Error('STOPPED_BY_USER');
         return {status: 'ready', count: 1, merchantId: mode === 'missing-merchant' ? null : 'internal-id',
           merchantNo: mode === 'missing-merchant' ? null : mode === 'switch' && submits ? 'OTHER' : merchantNo};
       }
-      if (operation === 'snapshotExportTasks') return {status:'found',rows:submits ? [{id:'new-task',fileName}] : []};
+      if (operation === 'snapshotExportTasks') {
+        if (submits && ['submit-timeout', 'reconcile-error', 'stop-reconcile'].includes(mode)) {
+          reconciles++;
+          assert(savedAttempt);
+          if (mode === 'stop-reconcile') throw new Error('STOPPED_BY_USER');
+          if (mode === 'reconcile-error') throw new Error('snapshot timeout');
+        }
+        return {status:'found',rows:submits ? [{id:'20260930120002681550426941423616',fileName,
+          createdAt:new Clock().toISOString().slice(0,19).replace('T',' ')}] : []};
+      }
       if (operation === 'submitExport') {
         submits++;
         assert(savedAttempt, 'attempt must be saved before side effect');
@@ -123,7 +132,8 @@ async function monthly(mode) {
     }
     assert.equal(submits, 1);
   }
-  assert.equal(reconciles, ['submit-timeout', 'reconcile-error', 'stop-reconcile'].includes(mode) ? 1 : 0);
+  if (mode === 'reconcile-error') assert(reconciles > 0);
+  else assert.equal(reconciles, ['submit-timeout', 'stop-reconcile'].includes(mode) ? 1 : 0);
 }
 
 async function retentionStopsBeforeDownload() {
@@ -139,7 +149,7 @@ async function retentionStopsBeforeDownload() {
 }
 
 (async () => {
-  for (const mode of ['accepted', 'multiple', 'merchant-mismatch', 'bad-id', 'old-task', 'no-new', 'read-error', 'duplicate-baseline']) await reconcile(mode);
+  for (const mode of ['accepted', 'multiple', 'merchant-mismatch', 'bad-id', 'old-task', 'no-new', 'read-error', 'duplicate-baseline', 'already-bound']) await reconcile(mode);
   for (const mode of ['normal', 'submit-timeout', 'reconcile-error', 'switch', 'missing-merchant', 'blocked', 'stop-query', 'stop-submit', 'stop-reconcile']) await monthly(mode);
   await retentionStopsBeforeDownload();
   for (const names of [[fileName, null], [fileName, fileName]]) {

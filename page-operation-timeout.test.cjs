@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(`${__dirname}/export-runner.js`, 'utf8');
-const invoke = source.slice(source.indexOf('const injectedAdapters ='), source.indexOf('const parsePortalTimestamp ='));
+const invoke = source.slice(source.indexOf('const injectedAdapters ='), source.indexOf('const run ='));
 const limits = [];
 let now = 1000;
 class Clock extends Date { static now() { return now; } }

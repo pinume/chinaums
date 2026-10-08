@@ -16,16 +16,18 @@ async function check(mode) {
 
   const calls = [];
   const context = vm.createContext({
-    Date: Clock,
-    reportType: "account-detail",
-    tabId: 1,
-    normalize: (value) => String(value || "").replace(/\s/g, "").toUpperCase(),
-    state: { months: {} },
-    activeNow: () => now,
-    checkpoint: async () => {},
-    sleep: async (milliseconds) => { now += milliseconds; }
+    Date: Clock
   });
-  context.invoke = async (_, operation, args) => {
+  const baselineRows = mode === "duplicate-baseline"
+    ? [{ id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, { id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }]
+    : [{ id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }];
+  let submits = 0;
+  let needsBaseline = false;
+  const events = [];
+  const invoke = async (operation, args) => {
+    if (operation === "query") { needsBaseline = true; return { status: "ready", count: 1, merchantNo }; }
+    if (operation === "submitExport") { submits++; return { status: "unknown" }; }
+    if (needsBaseline) { needsBaseline = false; return { status: "found", rows: baselineRows }; }
     calls.push(operation);
     assert.equal(operation, "snapshotExportTasks", "account UNKNOWN reconciliation must not use download-list UI");
     assert(args.operationDeadline > now);
@@ -48,30 +50,32 @@ async function check(mode) {
     return { status: "found", rows };
   };
 
-  const source = fs.readFileSync(`${__dirname}/export-runner.js`, "utf8");
-  vm.runInContext(source.slice(
-    source.indexOf("const parsePortalTimestamp ="),
-    source.indexOf("const run =")
-  ) + "\nglobalThis.reconcile = reconcileUnknown;", context);
-
-  const baselineRows = mode === "duplicate-baseline"
-    ? [{ id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }, { id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }]
-    : [{ id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }];
-  const result = await context.reconcile({
-    attemptedAt,
-    targetMerchantNo: merchantNo,
-    gate: { allowed: true, merchantNo },
-    baselineRows
+  vm.runInContext(fs.readFileSync(`${__dirname}/monthly-runner.js`, "utf8"), context);
+  const run = context.CHINAUMS_MONTHLY_RUNNER.run({
+    months: [1, ...(mode === "already-bound" ? [2] : [])].map(month => ({
+      key: `2026-0${month}`, start: `2026-0${month}-01`, end: `2026-0${month}-28`
+    })),
+    reportType: "account-detail", gate: {}, invoke,
+    checkpoint: async () => {}, sleep: async milliseconds => { now += milliseconds; },
+    now: () => now, transition: async event => events.push({ ...event })
   });
+  let result;
+  if (mode === "accepted") result = (await run)[0];
+  else {
+    await assert.rejects(run, /UNKNOWN/);
+    result = events.at(-1);
+  }
+  assert.equal(submits, mode === "already-bound" ? 2 : 1, "unknown submissions must never be repeated");
 
   if (mode === "accepted") {
-    assert.equal(result.status, "accepted");
-    assert.equal(result.taskId, acceptedId);
-    assert.equal(result.fileName, fileName);
-    assert.equal(result.createdAt, "2026/10/05 13:36:31");
+    assert.equal(result.status, "SUBMITTED");
+    assert.equal(result.remoteTaskId, acceptedId);
+    assert.equal(result.remoteFileName, fileName);
+    assert.equal(result.remoteCreatedAt, "2026/10/05 13:36:31");
     assert.deepEqual(calls, ["snapshotExportTasks"]);
   } else {
-    assert.equal(result.status, "unknown", mode);
+    assert.equal(result.status, "UNKNOWN", mode);
+    if (mode === "already-bound") assert.match(result.reason, /身份校验未通过/);
     assert(!calls.some((operation) => [
       "classifySubmit", "openDownloadList", "parseDownloadTasks", "closeDownloadList"
     ].includes(operation)));
@@ -84,7 +88,7 @@ async function check(mode) {
 
 (async () => {
   for (const mode of ["accepted", "multiple", "merchant-mismatch", "bad-id", "old-task",
-    "no-new", "read-error", "duplicate-baseline"]) {
+    "no-new", "read-error", "duplicate-baseline", "already-bound"]) {
     await check(mode);
   }
   console.log("PASS: account UNKNOWN reconciliation uses snapshot ID diff only and never opens the download list");

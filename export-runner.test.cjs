@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const trade = process.argv.includes("trade-audit");
+const unknownSubmit = process.argv.includes("UNKNOWN");
 const stopAtSubmit = process.argv.includes("STOPPED");
 let downloadListOpen = process.argv.includes("LIST_OPEN");
 const elements = new Map();
@@ -33,7 +34,7 @@ const prior = {
 prior.months[months[0].key].downloadStatus = "REQUESTED";
 prior.months[months[0].key].downloadedFileName = "already-clicked.xlsx";
 context.CHINAUMS_AUTH = { classify: () => ({ status: "logged_in", confidence: "high" }) };
-if (!stopAtSubmit) context.CHINAUMS_MONTHLY_RUNNER = {
+if (!stopAtSubmit && !unknownSubmit) context.CHINAUMS_MONTHLY_RUNNER = {
   yearToDateMonths: context.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths,
   run: async (args) => {
     assert.equal(args.months.length, months.length);
@@ -45,6 +46,8 @@ if (!stopAtSubmit) context.CHINAUMS_MONTHLY_RUNNER = {
     for (const month of args.months) await args.transition({ month: month.key, status: "SUBMITTED", submittedAt: new Date().toISOString() });
   }
 };
+const remoteTasks = [];
+let submits = 0;
 let downloadRuns = 0;
 let adapterInjections = 0;
 let startupCloseCalls = 0;
@@ -55,6 +58,11 @@ context.CHINAUMS_DOWNLOAD_RUNNER = { run: async (args) => {
   downloadRuns += 1;
   if (trade) await args.onMerchantIdentified(merchantNo);
 
+  if (unknownSubmit) {
+    assert.equal(submits, months.length, "UNKNOWN reconciliation must not repeat submissions");
+    assert(args.submittedMonths.every(month => remoteTasks.some(task => task.id === month.remoteTaskId && task.fileName === month.remoteFileName)));
+    assert(Object.values(latest.months).every(month => month.reconciled === true));
+  }
   assert.notEqual(args.startedAt, prior.startedAt);
   assert.equal(args.submittedMonths.length, months.length);
   assert.equal(args.submittedMonths[0].downloadedFileName, null, "legacy click records must not count as completed");
@@ -90,6 +98,20 @@ context.chrome = {
     if (args[0]?.reportType) return [{ frameId: 0, result: { isReportFrame: true } }];
     if (typeof args[0] === "object") return [{ result: { isTopFrame: true, url: tab.url } }];
     if (args.length === 1) return [{ result: true }];
+    if (unknownSubmit) {
+      if (args[1] === "query") return [{result: {status: "ready", count: 1,
+        merchantNo, ...(trade ? {merchantId: "internal-id"} : {})}}];
+      if (args[1] === "snapshotExportTasks") return [{result: {status: "found", rows: remoteTasks.map(task => ({...task}))}}];
+      if (args[1] === "submitExport") {
+        submits++;
+        const stamp = new Date().toISOString().slice(0,19).replace(/\D/g, "");
+        remoteTasks.push({id: String(submits).padStart(32,"0"),
+          fileName: trade ? `MER_${merchantNo}_${String(Number(stamp) + submits)}_yjhx.xlsx`
+            : `${merchantNo}_MX_${stamp}_${submits}.xlsx`,
+          createdAt: new Date().toISOString().slice(0,19).replace("T"," ")});
+        return [{result: {status: "unknown"}}];
+      }
+    }
     if (stopAtSubmit) {
       if (args[1] === "submitDialogState") return [{result: {status: "clear"}}];
       if (args[1] === "query") return [{result: {status: "ready", count: 1,
@@ -114,7 +136,7 @@ context.chrome = {
   } }
 };
 vm.runInContext(fs.readFileSync(`${__dirname}/export-runner.js`, "utf8"), context);
-const timer = setTimeout(() => { console.error("FAIL: resume did not finish"); process.exitCode = 1; }, stopAtSubmit ? 5000 : 1000);
+const timer = setTimeout(() => { console.error("FAIL: resume did not finish"); process.exitCode = 1; }, stopAtSubmit || unknownSubmit ? 5000 : 1000);
 completed.then((state) => {
   assert.equal(elements.get("#export-result").hidden, false);
   assert.equal(elements.get("#export-close").disabled, false);
@@ -138,11 +160,12 @@ completed.then((state) => {
   assert.equal(downloadRuns, 1);
   assert.equal(state.merchantNo, merchantNo);
   assert(elements.get("#export-target").textContent.includes(merchantNo), "both reports must display the identified merchant");
-  assert.equal(adapterInjections, 0, "replace a preexisting adapter once without resetting it for every operation");
+  assert.equal(adapterInjections, unknownSubmit ? 1 : 0, "replace a preexisting adapter once without resetting it for every operation");
   assert.equal(startupCloseCalls, 0,
     `${trade ? "trade" : "account"} startup must only touch the download list when inspect confirms it is already open`);
   assert.equal(state.logs.filter((message) => message.startsWith("暂存接口暂未确认")).length, 1,
     "unchanged polling results must not spam the log");
-  console.log(`PASS: ${prior.status} starts a fresh run and archives old state`);
+  console.log(unknownSubmit ? `PASS: ${trade ? "trade" : "account"} export entry reconciles UNKNOWN tasks and persists exact identity without replay`
+    : `PASS: ${prior.status} starts a fresh run and archives old state`);
 }).catch((error) => { console.error(error); process.exitCode = 1; })
   .finally(() => clearTimeout(timer));
