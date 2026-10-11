@@ -301,4 +301,43 @@ if (elements.openPortalButton) {
   });
 }
 
-showUnsavedPageState().finally(refreshExportTestButton);
+const checkActiveRun = async () => {
+  if (!chrome?.storage?.local?.get) return;
+  try {
+    const stored = await chrome.storage.local.get("activeExportRun");
+    const activeExportRun = stored?.activeExportRun;
+    const banner = document.querySelector("#active-run-banner");
+    const bannerText = document.querySelector("#active-run-text");
+    const viewButton = document.querySelector("#view-active-run-button");
+    const active = activeExportRun && ["GATING", "RUNNING", "WAITING_FOR_SLOT", "WAITING_GENERATION", "PAUSED", "SUBMITTING", "DOWNLOADING"].includes(activeExportRun.status);
+    if (banner && active) {
+      banner.hidden = false;
+      if (bannerText) {
+        bannerText.textContent = `任务运行中：${activeExportRun.currentMonth || activeExportRun.stage || "导出中"}`;
+      }
+      if (viewButton) {
+        viewButton.addEventListener("click", async () => {
+          if (activeExportRun.runnerTabId && chrome?.tabs?.update) {
+            try {
+              await chrome.tabs.update(activeExportRun.runnerTabId, { active: true });
+              window.close();
+              return;
+            } catch {}
+          }
+          const runnerUrl = new URL(chrome.runtime.getURL("export.html"));
+          runnerUrl.searchParams.set("tabId", String(activeExportRun.tabId || 1));
+          runnerUrl.searchParams.set("reportType", activeExportRun.reportType || "account-detail");
+          await chrome.tabs.create({ url: runnerUrl.href });
+          window.close();
+        });
+      }
+    } else if (banner) {
+      banner.hidden = true;
+    }
+  } catch {}
+};
+
+showUnsavedPageState().finally(() => {
+  refreshExportTestButton();
+  checkActiveRun();
+});

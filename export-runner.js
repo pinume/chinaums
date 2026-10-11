@@ -21,7 +21,11 @@ const elements = {
   result: document.querySelector("#export-result"),
   resultTitle: document.querySelector("#export-result-title"),
   resultMessage: document.querySelector("#export-result-message"),
-  log: document.querySelector("#export-log")
+  log: document.querySelector("#export-log"),
+  progressBar: document.querySelector("#export-progress-bar"),
+  downloadProgressBar: document.querySelector("#export-download-progress-bar"),
+  monthsSummary: document.querySelector("#export-months-summary"),
+  monthsGrid: document.querySelector("#export-months-grid")
 };
 
 let state = null;
@@ -105,7 +109,9 @@ const appendLog = (message) => {
   const item = document.createElement("li");
   item.textContent = `${new Intl.DateTimeFormat("zh-CN", { timeStyle: "medium" }).format(new Date())}　${message}`;
   elements.log.append(item);
-  item.scrollIntoView({ block: "nearest" });
+  if (elements.log) {
+    elements.log.scrollTop = elements.log.scrollHeight;
+  }
   if (state) {
     state.logs.push(message);
     state.logs = state.logs.slice(-200);
@@ -140,6 +146,71 @@ const renderState = () => {
   elements.gate.className = state.businessGate?.allowed ? "status-positive" : "";
   updateButtons();
   renderResult(state.status, state.error, submitted, downloadRequested);
+
+  if (elements.progressBar?.style) {
+    const progressPercent = state.monthOrder?.length ? Math.round((completed / state.monthOrder.length) * 100) : 0;
+    elements.progressBar.style.width = `${progressPercent}%`;
+  }
+  if (elements.downloadProgressBar?.style) {
+    const downloadPercent = submitted ? Math.round((downloadRequested / submitted) * 100) : 0;
+    elements.downloadProgressBar.style.width = `${downloadPercent}%`;
+  }
+
+
+  if (elements.monthsGrid && state.monthOrder) {
+    if (elements.monthsSummary) {
+      elements.monthsSummary.textContent = `${completed} / ${state.monthOrder.length} 月已处理`;
+    }
+    const badgeMap = {
+      PENDING: { label: "待处理", cls: "badge-pending" },
+      QUERYING: { label: "查询中…", cls: "badge-active" },
+      QUERY_READY: { label: "查询就绪", cls: "badge-active" },
+      SUBMITTING: { label: "申请中…", cls: "badge-active" },
+      WAITING_FOR_SLOT: { label: "排队等待", cls: "badge-warning" },
+      SUBMITTED: { label: "已提交", cls: "badge-info" },
+      NO_DATA: { label: "无数据", cls: "badge-neutral" },
+      UNKNOWN: { label: "待对账", cls: "badge-warning" },
+      FAILED: { label: "失败", cls: "badge-danger" }
+    };
+    const cards = [];
+    for (const monthKey of state.monthOrder) {
+      const mData = state.months?.[monthKey] || {};
+      const card = document.createElement("div");
+      const isCurrent = state.currentMonth === monthKey;
+      const isDownloaded = mData.downloadStatus === "COMPLETED";
+      const isDownloading = mData.downloadStatus === "REQUESTED";
+      let badge = badgeMap[mData.status] || { label: mData.status || "待处理", cls: "badge-pending" };
+      if (isDownloaded) {
+        badge = { label: "已下载 ✓", cls: "badge-success" };
+      } else if (isDownloading) {
+        badge = { label: "下载中…", cls: "badge-active" };
+      } else if (state.status === "WAITING_GENERATION" && mData.status === "SUBMITTED") {
+        badge = { label: "等待生成", cls: "badge-warning" };
+      }
+      const monthLabel = /^\d{4}-\d{1,2}$/.test(monthKey)
+        ? `${monthKey.slice(5)}月`
+        : monthKey.replace(/^\d{4}-?/, "");
+      card.className = `month-card ${isCurrent ? "month-card-active" : ""} ${isDownloaded ? "month-card-done" : ""} ${mData.status === "NO_DATA" ? "month-card-empty" : ""}`;
+      const countText = typeof mData.count === "number"
+        ? (mData.count === 0 ? "0笔" : `${mData.count}笔`)
+        : "";
+      card.innerHTML = `
+        <div class="month-card-left">
+          <strong class="month-name">${monthLabel}</strong>
+          ${countText ? `<span class="month-count">${countText}</span>` : ""}
+        </div>
+        <span class="month-badge ${badge.cls}">${badge.label}</span>
+      `;
+      card.title = `${monthKey}${countText ? ` (${countText})` : ""}${mData.remoteFileName || mData.remoteTaskId ? `：${mData.remoteFileName || mData.remoteTaskId}` : ""}`;
+      cards.push(card);
+    }
+    if (typeof elements.monthsGrid.replaceChildren === "function") {
+      elements.monthsGrid.replaceChildren(...cards);
+    } else if ("innerHTML" in elements.monthsGrid) {
+      elements.monthsGrid.innerHTML = "";
+      cards.forEach((c) => elements.monthsGrid.append(c));
+    }
+  }
 };
 
 const transition = async (event) => {
