@@ -76,16 +76,6 @@ const renderResult = (status, error = "", submitted = 0, downloaded = 0) => {
 };
 
 const sleep = (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-const withTimeout = (promise, milliseconds, operation) => {
-  let timerId;
-  const timeout = new Promise((_, reject) => {
-    timerId = window.setTimeout(
-      () => reject(new Error(`接口操作“${operation}”在${Math.ceil(milliseconds / 1000)}秒内没有响应。`)),
-      milliseconds
-    );
-  });
-  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timerId));
-};
 const normalize = (value) => String(value ?? "").replace(/[\s\u200B-\u200D\uFEFF]/g, "").toUpperCase();
 const scannerConfig = {
   host: SITE_CONFIG.host,
@@ -326,100 +316,16 @@ const verifyCurrentSession = async () => {
   };
 };
 
-const waitForDownload = async ({ fileName, downloadId }) => {
-  if (!chrome.downloads?.search) throw new Error("下载确认权限不可用，请重新加载扩展并允许 downloads 权限。");
-  if (!Number.isInteger(downloadId) || downloadId < 0) throw new Error("下载 ID 无效，不能确认下载完成。");
-  const escapedStem = fileName.replace(/\.xlsx$/i, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const filenameRegex = `(?:^|[/\\\\])${escapedStem}(?: \\(\\d+\\))?\\.xlsx$`;
-  const deadline = activeNow() + 5 * 60 * 1000;
-  while (activeNow() < deadline) {
-    await checkpoint();
-    const items = await chrome.downloads.search({ id: downloadId });
-    if (items.length > 1) throw new Error(`文件 ${fileName} 对应多个新下载记录，无法唯一确认。`);
-    const item = items[0];
-    if (item && item.id !== downloadId) throw new Error(`文件 ${fileName} 的下载记录身份不一致。`);
-    if (item?.state === "interrupted") throw new Error(`文件 ${fileName} 下载中断：${item.error || "未知原因"}。`);
-    if (item?.state === "complete") {
-      if (!new RegExp(filenameRegex, "i").test(item.filename || "")) throw new Error(`文件 ${fileName} 的下载记录身份不一致。`);
-      if (item.exists !== true) throw new Error(`文件 ${fileName} 已被删除，不能记为下载完成。`);
-      return { status: "download_completed", downloadId: item.id };
-    }
-    await sleep(500);
-  }
-  throw new Error(`文件 ${fileName} 在 5 分钟内未确认下载完成；停止后续下载，请检查 Chrome 下载记录。`);
-};
-
-const injectedAdapters = new Set();
-const invoke = async (reportType, operation, args = {}, targetTabId = tabId) => {
-  await checkpoint();
-  if (operation === "confirmDownload") return waitForDownload(args);
-  const defaultLimit = ["account-detail", "trade-audit"].includes(reportType) && ["query", "submitExport"].includes(operation) ? 60000 : 15000;
-  const operationDeadline = Math.min(Date.now() + defaultLimit, args.operationDeadline ?? Infinity);
-  const checkDeadline = () => {
-    if (Date.now() >= operationDeadline) throw new Error(`接口操作“${operation}”已超过截止时间。`);
-  };
-  checkDeadline();
-  return withTimeout((async () => {
-    const frameId = 0;
-    checkDeadline();
-    const file = reportType === "account-detail" ? "account-detail.js" : "trade-audit.js";
-    const globalName = reportType === "account-detail"
-      ? "__chinaumsAccountDetailAdapter"
-      : "__chinaumsTradeAuditAdapter";
-    const world = "ISOLATED";
-    const loaded = await chrome.scripting.executeScript({
-      target: { tabId: targetTabId, frameIds: [frameId] }, world,
-      func: (name) => typeof globalThis[name] === "function",
-      args: [globalName]
-    });
-    checkDeadline();
-    const injectionKey = `${targetTabId}:${frameId}:${file}`;
-    if (!injectedAdapters.has(injectionKey) || loaded[0]?.result !== true) {
-      await chrome.scripting.executeScript({ target: { tabId: targetTabId, frameIds: [frameId] }, world, files: [file] });
-      injectedAdapters.add(injectionKey);
-    }
-    checkDeadline();
-    const result = await chrome.scripting.executeScript({
-      target: { tabId: targetTabId, frameIds: [frameId] }, world,
-      func: async (name, action, actionArgs) => {
-        if (Date.now() >= actionArgs.operationDeadline) throw new Error("接口操作已超过截止时间，未执行。");
-        const adapter = globalThis[name];
-        if (typeof adapter !== "function") return { status: "adapter_missing" };
-        return await adapter(action, actionArgs);
-      },
-      args: [globalName, operation, { ...args, operationDeadline }]
-    });
-    const response = result[0]?.result || { status: "unknown" };
-    if (operation !== "downloadTaskDirect" || response.status !== "download_requested") return response;
-    const url = new URL(response.url);
-    const account = reportType === "account-detail";
-    const expectedPath = account ? "/uisportal/commonController/exportDeailBill"
-      : `/uisportal/api/uis-tradein-server/portal/yjhx/v3/downloadExportFile/${args.taskId}`;
-    if (url.origin !== `https://${SITE_CONFIG.host}` || url.pathname !== expectedPath ||
-      (account && url.searchParams.get("exportId") !== args.taskId) ||
-      (!account && !url.searchParams.get("userPortalToken"))) throw new Error("下载地址与本轮任务不一致。");
-    await checkpoint();
-    checkDeadline();
-    const downloadId = await chrome.downloads.download({ url: url.href, conflictAction: "uniquify" });
-    if (!Number.isInteger(downloadId) || downloadId < 0) throw new Error("Chrome 未返回有效下载 ID；禁止重复请求。");
-    return { status: "download_requested", downloadId };
-  })(), Math.max(0, operationDeadline - Date.now()), operation);
-};
+const invoke = globalThis.CHINAUMS_BROWSER_RUNNER.create({
+  chrome: globalThis.chrome, host: SITE_CONFIG.host, tabId, checkpoint, sleep, now: activeNow
+});
 
 const run = async () => {
   if (!["account-detail", "trade-audit"].includes(reportType) || !Number.isInteger(tabId) || tabId <= 0 || !SITE_CONFIG) throw new Error("导出参数无效。");
   if (reportType === "trade-audit" && new Date().getFullYear() !== 2026) {
     throw new Error("已上传明细采集当前仅适配 2026 页面。");
   }
-  const months = globalThis.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths();
   const isTradeAudit = reportType === "trade-audit";
-  const fullYearRanges = globalThis.CHINAUMS_MONTHLY_RUNNER.fullYearRange?.() || [{
-    key: `${new Date().getFullYear()}全年`,
-    start: months[0].start,
-    end: months.at(-1).end
-  }];
-  const initialRanges = isTradeAudit ? fullYearRanges : months;
-  const monthKeys = initialRanges.map((month) => month.key);
   const stored = await chrome.storage.local.get(RUN_KEY);
   const prior = stored[RUN_KEY];
   const priorIsActive = prior && ["GATING", "RUNNING", "WAITING_FOR_SLOT", "WAITING_GENERATION", "PAUSED", "SUBMITTING", "ALL_MONTHS_SUBMITTED", "ALL_READY", "DOWNLOADING"].includes(prior.status);
@@ -459,13 +365,11 @@ const run = async () => {
     stage: "检查当前登录会话",
     status: "GATING",
     businessGate: { allowed: false, merchantNo: null },
-    monthOrder: monthKeys,
-    months: Object.fromEntries(initialRanges.map((month) => [month.key, { status: "PENDING", start: month.start, end: month.end }])),
+    monthOrder: [],
+    months: {},
     logs: []
   };
-  elements.target.textContent = state.monthOrder.length === 1
-    ? `当前商户：查询后识别　导出范围：${state.monthOrder[0]}`
-    : `当前商户：查询后识别　导出月份：${state.monthOrder[0]} 至 ${state.monthOrder.at(-1)}`;
+  elements.target.textContent = "当前商户：查询后识别";
   elements.close.disabled = true;
   await saveState();
 
@@ -492,67 +396,31 @@ const run = async () => {
   } else {
     appendLog("当前会话已登录。将沿用当前商户，从今年 1 月开始逐月查询；首个有数据的月份会识别商户号。");
   }
-  if (prior?.runId) appendLog(`上次运行（${prior.runId}）已留档；本轮从 ${monthKeys[0]} 重新开始，不会漏掉月份。`);
+  if (prior?.runId) appendLog(`上次运行（${prior.runId}）已留档；本轮从年初重新开始，不会漏掉月份。`);
   await saveState();
 
-  let activeRanges = initialRanges;
-  if (isTradeAudit) {
-    let fallbackToMonthly = false;
-    try {
-      await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
-        months: fullYearRanges,
-        reportType,
-        invoke: (operation, args) => invoke(reportType, operation, args),
-        gate,
-        checkpoint,
-        now: activeNow,
-        sleep,
-        transition,
-        onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
-      });
-    } catch (error) {
-      if (error?.message === "STOPPED_BY_USER") throw error;
-      fallbackToMonthly = true;
-      appendLog(`全年导出未成功（${error?.message || "服务端限制或查询失败"}），触发兜底，切换为按月导出。`);
-    }
-
-    if (fallbackToMonthly) {
-      activeRanges = months;
-      state.monthOrder = months.map((month) => month.key);
-      state.months = Object.fromEntries(months.map((month) => [month.key, { status: "PENDING", start: month.start, end: month.end }]));
+  let activeRanges;
+  await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
+    reportType,
+    invoke: (operation, args) => invoke(reportType, operation, args),
+    gate,
+    checkpoint,
+    now: activeNow,
+    sleep,
+    transition,
+    onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source),
+    onRangesChanged: async (ranges, reason) => {
+      if (reason) appendLog(`全年导出未成功（${reason}），触发兜底，切换为按月导出。`);
+      activeRanges = ranges;
+      state.monthOrder = ranges.map((month) => month.key);
+      state.months = Object.fromEntries(ranges.map((month) => [month.key, { status: "PENDING", start: month.start, end: month.end }]));
       elements.target.textContent = state.monthOrder.length === 1
         ? `当前商户：${state.merchantNo || "查询后识别"}　导出范围：${state.monthOrder[0]}`
         : `当前商户：${state.merchantNo || "查询后识别"}　导出月份：${state.monthOrder[0]} 至 ${state.monthOrder.at(-1)}`;
       renderState();
       await saveState();
-
-      await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
-        months,
-        reportType,
-        invoke: (operation, args) => invoke(reportType, operation, args),
-        gate,
-        checkpoint,
-        now: activeNow,
-        sleep,
-        transition,
-        onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
-      });
     }
-  } else {
-    if (months.length) {
-      await globalThis.CHINAUMS_MONTHLY_RUNNER.run({
-        months,
-        reportType,
-        invoke: (operation, args) => invoke(reportType, operation, args),
-        gate,
-        checkpoint,
-        now: activeNow,
-        sleep,
-        transition,
-        onMerchantVerified: (merchantNo, source = "query-result") => recordMerchant(merchantNo, source)
-      });
-    }
-  }
+  });
 
   const submittedMonths = activeRanges
     .filter((month) => state.months[month.key]?.status === "SUBMITTED")
@@ -565,9 +433,7 @@ const run = async () => {
         ? state.months[month.key].downloadedFileName : null
     }));
   state.status = "ALL_MONTHS_SUBMITTED";
-  state.stage = isTradeAudit && activeRanges === fullYearRanges
-    ? "全年申请完成，准备等待文件生成并下载"
-    : "所有月份申请完成，准备等待文件生成并下载";
+  state.stage = "本轮申请完成，准备等待文件生成并下载";
   await saveState();
 
   if (submittedMonths.length) {

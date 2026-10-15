@@ -53,6 +53,7 @@ const startup = vm.createContext({URLSearchParams, Date, Intl, location: {search
   }}
 });
 vm.runInContext(fs.readFileSync(`${__dirname}/../site-config.js`, 'utf8'), startup);
+vm.runInContext(fs.readFileSync(`${__dirname}/../browser-runner.js`, 'utf8'), startup);
 vm.runInContext(source, startup);
 setImmediate(() => {
   assert.equal(startupElements.get('#export-result').hidden, false);

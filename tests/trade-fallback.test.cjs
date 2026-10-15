@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 
-const setupContext = ({ onQuery, onSubmit }) => {
+const setupContext = ({ onQuery, onSubmit, onSnapshot = rows => rows }) => {
   const elements = new Map();
   const element = (selector) => {
     if (!elements.has(selector)) elements.set(selector, {
@@ -66,7 +66,7 @@ const setupContext = ({ onQuery, onSubmit }) => {
           return [{ result: onQuery(opArgs) }];
         }
         if (operation === "snapshotExportTasks") {
-          return [{ result: { status: "found", rows: remoteTasks.map(t => ({ ...t })) } }];
+          return [{ result: { status: "found", rows: onSnapshot(remoteTasks.map(t => ({ ...t }))) } }];
         }
         if (operation === "submitExport") {
           const res = onSubmit(opArgs);
@@ -104,6 +104,7 @@ const setupContext = ({ onQuery, onSubmit }) => {
     }
   };
 
+  vm.runInContext(fs.readFileSync(`${__dirname}/../browser-runner.js`, "utf8"), context);
   vm.runInContext(fs.readFileSync(`${__dirname}/../export-runner.js`, "utf8"), context);
 
   return { completed, elements };
@@ -177,7 +178,39 @@ async function testSubmitFailureFallback() {
   console.log("PASS: trade-audit submit failure triggers fallback to monthly export");
 }
 
+async function testUnknownSubmissionStops() {
+  let queries = 0, submits = 0;
+  const { completed } = setupContext({
+    onQuery: () => { queries++; return { status: "ready", count: 1, merchantId: "internal-id", merchantNo: "89813014812B1L3" }; },
+    onSubmit: () => { submits++; return { status: "unknown" }; },
+    onSnapshot: rows => submits ? [{ id: "1".repeat(32) }, { id: "2".repeat(32) }] : rows
+  });
+  const state = await completed;
+  assert.equal(queries, 1);
+  assert.equal(submits, 1, "UNKNOWN full-year submission must not be retried monthly");
+  assert.equal(state.status, "BLOCKED");
+  assert.equal(state.months["2026全年"].status, "UNKNOWN");
+  console.log("PASS: UNKNOWN full-year submission stops without monthly fallback");
+}
+
+async function testAcceptedBindingFailureStops() {
+  let queries = 0, submits = 0;
+  const { completed } = setupContext({
+    onQuery: () => { queries++; return { status: "ready", count: 1, merchantId: "internal-id", merchantNo: "89813014812B1L3" }; },
+    onSubmit: () => { submits++; return { status: "accepted" }; },
+    onSnapshot: rows => rows.length ? [...rows, { ...rows[0], id: "9".repeat(32) }] : rows
+  });
+  const state = await completed;
+  assert.equal(queries, 1, "accepted full-year task must not trigger monthly queries after binding failure");
+  assert.equal(submits, 1, "accepted full-year task must not be resubmitted monthly");
+  assert.equal(state.status, "BLOCKED");
+  assert.equal(state.months["2026全年"].status, "SUBMITTED", "accepted task evidence must survive");
+  console.log("PASS: accepted full-year binding failure stops without clearing task evidence");
+}
+
 (async () => {
+  await testUnknownSubmissionStops();
+  await testAcceptedBindingFailureStops();
   await testHappyPathFullYear();
   await testQueryFailureFallback();
   await testSubmitFailureFallback();

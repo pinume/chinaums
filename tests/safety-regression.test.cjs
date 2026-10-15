@@ -102,7 +102,7 @@ async function monthly(mode) {
           if (mode === 'reconcile-error') throw new Error('snapshot timeout');
         }
         return {status:'found',rows:submits ? [{id:'20260930120002681550426941423616',fileName,
-          createdAt:new Clock().toISOString().slice(0,19).replace('T',' ')}] : []};
+          createdAt:new Clock(now - new Clock().getTimezoneOffset() * 60000).toISOString().slice(0,19).replace('T',' ')}] : []};
       }
       if (operation === 'submitExport') {
         submits++;
@@ -161,7 +161,7 @@ async function retentionStopsBeforeDownload() {
     }), names[1] ? /同一远端文件名/ : /缺少本月已确认的远端文件名/);
     assert.equal(calls, 0, 'missing identity and timestamp must stop before opening or clicking');
   }
-  const guard = source.slice(source.indexOf('  if (reportType === "trade-audit" && new Date().getFullYear()'), source.indexOf('  const months = globalThis.CHINAUMS_MONTHLY_RUNNER.yearToDateMonths();'));
+  const guard = source.slice(source.indexOf('  if (reportType === "trade-audit" && new Date().getFullYear()'), source.indexOf('  const isTradeAudit ='));
   now = new Date(2027, 0, 1).getTime();
   assert.throws(() => vm.runInContext(guard, context), /当前仅适配 2026/);
   context.reportType = 'account-detail';

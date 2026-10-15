@@ -39,13 +39,15 @@ if (!stopAtSubmit && !unknownSubmit) context.CHINAUMS_MONTHLY_RUNNER = {
   fullYearRange: context.CHINAUMS_MONTHLY_RUNNER.fullYearRange,
   run: async (args) => {
     const expectedCount = trade ? 1 : months.length;
-    assert.equal(args.months.length, expectedCount);
+    const ranges = trade ? context.CHINAUMS_MONTHLY_RUNNER.fullYearRange() : months;
+    assert.equal(ranges.length, expectedCount);
+    await args.onRangesChanged(ranges);
     assert.equal(args.targetMerchantNo, undefined);
     assert(Object.values(latest.months).every((month) => month.status === "PENDING"));
     await args.onMerchantVerified(merchantNo);
-    await args.transition({ month: args.months[0].key, status: "WAITING_FOR_SLOT", retryInMs: 60000, attempt: 2 });
+    await args.transition({ month: ranges[0].key, status: "WAITING_FOR_SLOT", retryInMs: 60000, attempt: 2 });
     assert(latest.logs.some(log => log.includes("第 2 次") && log.includes("60 秒")));
-    for (const month of args.months) await args.transition({ month: month.key, status: "SUBMITTED", submittedAt: new Date().toISOString() });
+    for (const month of ranges) await args.transition({ month: month.key, status: "SUBMITTED", submittedAt: new Date().toISOString() });
   }
 };
 const remoteTasks = [];
@@ -117,7 +119,7 @@ context.chrome = {
         remoteTasks.push({id: String(submits).padStart(32,"0"),
           fileName: trade ? `MER_${merchantNo}_${String(Number(stamp) + submits)}_yjhx.xlsx`
             : `${merchantNo}_MX_${stamp}_${submits}.xlsx`,
-          createdAt: new Date().toISOString().slice(0,19).replace("T"," ")});
+          createdAt: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0,19).replace("T"," ")});
         return [{result: {status: "unknown"}}];
       }
     }
@@ -130,6 +132,7 @@ context.chrome = {
     return [{ result: { status: "unknown" } }];
   } }
 };
+vm.runInContext(fs.readFileSync(`${__dirname}/../browser-runner.js`, "utf8"), context);
 vm.runInContext(fs.readFileSync(`${__dirname}/../export-runner.js`, "utf8"), context);
 const timer = setTimeout(() => { console.error("FAIL: resume did not finish"); process.exitCode = 1; }, stopAtSubmit || unknownSubmit ? 5000 : 1000);
 completed.then((state) => {

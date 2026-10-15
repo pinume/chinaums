@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const source = fs.readFileSync(`${__dirname}/../export-runner.js`, "utf8");
+const source = fs.readFileSync(`${__dirname}/../browser-runner.js`, "utf8");
 const fileName = "89813015722APT1_MX_20260930170206.xlsx";
 
 async function check(states, expectedError) {
@@ -9,16 +9,18 @@ async function check(states, expectedError) {
   let searches = 0;
   const context = vm.createContext({
     Date: { now: () => now },
-    activeNow: () => now, checkpoint: async () => {}, sleep: async (milliseconds) => { now += milliseconds; },
     chrome: { downloads: { search: async (query) => {
       assert.equal(query.id, 7);
       const item = states[Math.min(searches++, states.length - 1)];
       return item ? [{ filename: `/Downloads/${fileName.replace(".xlsx", " (1).xlsx")}`, ...item }] : [];
     } } }
   });
-  vm.runInContext(source.slice(source.indexOf("const waitForDownload ="), source.indexOf("const injectedAdapters =")) +
-    "globalThis.confirm = waitForDownload;", context);
-  const result = context.confirm({ fileName, downloadId: 7 });
+  vm.runInContext(source, context);
+  const invoke = context.CHINAUMS_BROWSER_RUNNER.create({
+    chrome: context.chrome, host: "service.chinaums.com", tabId: 1,
+    now: () => now, checkpoint: async () => {}, sleep: async ms => { now += ms; }
+  });
+  const result = invoke("account-detail", "confirmDownload", { fileName, downloadId: 7 });
   if (expectedError) await assert.rejects(result, expectedError);
   else {
     assert.equal((await result).downloadId, 7);

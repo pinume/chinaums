@@ -27,7 +27,7 @@
     }];
   };
 
-  const run = async ({ months, reportType, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, onMerchantVerified, now = () => Date.now() }) => {
+  const runMonths = async ({ months, reportType, invoke, gate, targetMerchantNo, checkpoint, sleep, transition, onMerchantVerified, now = () => Date.now() }) => {
     if (!Array.isArray(months) || !months.length) throw new Error("没有可执行的月份。");
     const results = [];
     let throttleAttempts = 0;
@@ -128,7 +128,7 @@
       if (!["ready", "no_data"].includes(queryState?.status)) {
         const reason = queryState?.reason || "查询结果状态无法确认，未申请导出。";
         await setMonthState(month, "FAILED", { reason });
-        throw new Error(`${month.key} 查询失败：${reason}`);
+        throw Object.assign(new Error(`${month.key} 查询失败：${reason}`), { fallbackAllowed: queryState?.status === "failed" });
       }
       if (queryState.status === "ready") {
         const actualMerchantNo = String(queryState.merchantNo || "").replace(/\s/g, "").toUpperCase();
@@ -254,7 +254,7 @@
 
         if (response?.status === "failed") {
           await setMonthState(month, "FAILED", { reason: response.message || "服务器明确拒绝了申请。" });
-          throw new Error(`${month.key} 导出失败：${response.message || "服务器返回明确失败"}`);
+          throw Object.assign(new Error(`${month.key} 导出失败：${response.message || "服务器返回明确失败"}`), { fallbackAllowed: true });
         }
 
         await transition({ month: month.key, status: "UNKNOWN", attemptedAt });
@@ -284,6 +284,20 @@
     }
 
     return results;
+  };
+
+  const run = async ({ months, onRangesChanged, ...options }) => {
+    const fullYear = !months && options.reportType === "trade-audit";
+    const ranges = months || (fullYear ? fullYearRange() : yearToDateMonths());
+    if (!months) await onRangesChanged(ranges);
+    try {
+      return await runMonths({ ...options, months: ranges });
+    } catch (error) {
+      if (!fullYear || error?.fallbackAllowed !== true) throw error;
+      const fallbackMonths = yearToDateMonths();
+      await onRangesChanged(fallbackMonths, error.message);
+      return await runMonths({ ...options, months: fallbackMonths });
+    }
   };
 
   globalThis.CHINAUMS_MONTHLY_RUNNER = Object.freeze({
